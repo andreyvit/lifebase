@@ -1,0 +1,3 @@
+- Run `go fmt ./...` after modifying any Go code (especially under `automation/`) to avoid whitespace churn in Git diffs.
+- Keep changes minimal and focused; prefer surgical edits over broad refactors unless requested.
+- Avoid `*WithOptions` (and similar wrapper) APIs; prefer explicit entry points and update all callers.
