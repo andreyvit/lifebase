@@ -1,0 +1,10 @@
+# The directory containing this file is your lifebase content root.
+raw_inputs_dir: "Raw"
+prompts_dir: "Prompts"
+write_history: true
+day_boundary_hour: 5
+agent_session_extend_if_interacted_within: "1h"
+
+# Optional:
+# audio_recorder_dir: "/absolute/path/to/recordings"
+# apple_health_export_dir: "/absolute/path/to/HealthAutoExport"

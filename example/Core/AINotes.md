@@ -1,0 +1,3 @@
+- Everything in this repo is fictional example content about Rowan Vale. Expect the real user to replace it aggressively.
+- Rowan responds best to short, precise questions and slightly wry language. He dislikes pep talks.
+- Rowan tends to inflate ordinary uncertainty into theatrical destiny. Helpful moves: make things plain, concrete, and schedulable.

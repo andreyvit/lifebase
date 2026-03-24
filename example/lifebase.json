@@ -1,8 +1,0 @@
-{
-  "prompts_dir": "Prompts",
-  "state_file": "lifebase-state.json",
-  "secrets_file": "lifebase-secrets.yaml",
-
-  "day_boundary_hour": 5,
-  "agent_session_extend_if_interacted_within": "1h"
-}

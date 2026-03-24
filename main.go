@@ -34,10 +34,12 @@ func main() {
 
 	var configFile string
 	var addFn string
+	var initMode bool
 	var proactiveName string
 	var commitMode bool
 	var health48 bool
 	flag.Usage = func() {
+		log.Printf("usage: lifebase [-f <config-file>] -init")
 		log.Printf("usage: lifebase [-f <config-file>] -add <input-file>")
 		log.Printf("   or: lifebase [-f <config-file>] -proactive <name>")
 		log.Printf("   or: lifebase [-f <config-file>] -commit")
@@ -47,10 +49,21 @@ func main() {
 	}
 	flag.StringVar(&configFile, "f", "./lifebase.yaml", "path to lifebase config file")
 	flag.StringVar(&addFn, "add", "", "add a new file")
+	flag.BoolVar(&initMode, "init", false, "initialize a lifebase in the target directory")
 	flag.StringVar(&proactiveName, "proactive", "", "run a proactive check-in now (e.g. 'evening')")
 	flag.BoolVar(&commitMode, "commit", false, "commit and push all changes")
 	flag.BoolVar(&health48, "health48", false, "print Apple Health hourly buckets for the last 48 hours")
 	flag.Parse()
+
+	if initMode {
+		if addFn != "" || proactiveName != "" || commitMode || health48 {
+			log.Fatalf("** -init cannot be combined with -add, -proactive, -commit, or -health48")
+		}
+		if err := initRepo(configFile, time.Now().Local()); err != nil {
+			log.Fatalf("** %v", err)
+		}
+		return
+	}
 
 	ensure(decodeUserFile(configFile, &config))
 	if config.DayBoundaryHour < 0 || config.DayBoundaryHour > 23 {

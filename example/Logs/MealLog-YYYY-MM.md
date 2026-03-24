@@ -1,0 +1,1 @@
+- YYYY-MM-DD 09:05 DDD - Had a 3000 calorie coffee drink the size of a regrettable prophecy. Delicious. Unwise. Educational.
