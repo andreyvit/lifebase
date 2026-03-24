@@ -1,5 +1,4 @@
 {
-  "content_dir": ".",
   "prompts_dir": "Prompts",
   "state_file": "lifebase-state.json",
   "secrets_file": "lifebase-secrets.yaml",

@@ -28,8 +28,8 @@ func runModel(ctx context.Context, prompt string, historySuffix string, extraCon
 
 	maybeRunHealthDayChangeProcessing(ctx, time.Now().Local())
 
-	bestEffortCommitAndPushContentMarkdown(ctx, "content changes before running model")
-	defer bestEffortCommitAndPushContentMarkdown(ctx, "content changes")
+	bestEffortCommitAndPushAllChanges(ctx, "changes before running model")
+	defer bestEffortCommitAndPushAllChanges(ctx, "changes")
 
 	return runClaudeCLI(ctx, prompt, historySuffix, extraContext)
 }

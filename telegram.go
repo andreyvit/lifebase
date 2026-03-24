@@ -338,15 +338,15 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 	case "commit":
 		commitMsg := strings.TrimSpace(rest)
 		if commitMsg == "" {
-			commitMsg = "content changes"
+			commitMsg = "changes"
 		}
-		res, err := commitAndPushContentMarkdown(ctx, commitMsg)
+		res, err := commitAndPushAllChanges(ctx, commitMsg)
 		if err != nil {
 			_ = sendTelegramText(ctx, fmt.Sprintf("Commit failed: %v", err))
 			return true
 		}
 		if !res.DidCommit {
-			_ = sendTelegramText(ctx, "No content changes to commit.")
+			_ = sendTelegramText(ctx, "No changes to commit.")
 			return true
 		}
 		if res.CommitSHA != "" {
@@ -497,7 +497,7 @@ func updateTelegramCommands(ctx context.Context) error {
 	}
 	if !seen["commit"] {
 		seen["commit"] = true
-		cmds = append(cmds, tgBotCommand{Command: "commit", Description: "Commit and push content changes"})
+		cmds = append(cmds, tgBotCommand{Command: "commit", Description: "Commit and push all changes"})
 	}
 	if paused {
 		if !seen["resume"] {

@@ -48,7 +48,7 @@ func main() {
 	flag.StringVar(&configFile, "f", "./lifebase.yaml", "path to lifebase config file")
 	flag.StringVar(&addFn, "add", "", "add a new file")
 	flag.StringVar(&proactiveName, "proactive", "", "run a proactive check-in now (e.g. 'evening')")
-	flag.BoolVar(&commitMode, "commit", false, "commit and push content markdown changes")
+	flag.BoolVar(&commitMode, "commit", false, "commit and push all changes")
 	flag.BoolVar(&health48, "health48", false, "print Apple Health hourly buckets for the last 48 hours")
 	flag.Parse()
 
@@ -60,7 +60,7 @@ func main() {
 		log.Fatalf("lifebase configuration error: agent_session_extend_if_interacted_within must be >= 0")
 	}
 	configBaseDir := filepath.Dir(must(filepath.Abs(configFile)))
-	rootDir = mustResolvePath(configBaseDir, config.ContentDir, "content_dir")
+	rootDir = configBaseDir
 	rawInputsDir = mustResolvePath(rootDir, config.RawInputsDir, "raw_inputs_dir")
 	promptsDir = mustResolvePath(rootDir, config.PromptsDir, "prompts_dir")
 	statePath = mustResolvePath(rootDir, config.StateFile, "state_file")
@@ -69,7 +69,6 @@ func main() {
 	secretsPath := mustResolvePath(rootDir, config.SecretsFile, "secrets_file")
 	ensure(decodeUserFile(secretsPath, &secrets))
 	ensure(os.MkdirAll(rawInputsDir, 0o777))
-	ensure(initContentPathSets())
 
 	// Ensure auto-generated file parent directories exist
 	for _, f := range []string{config.HealthFile, config.ProactiveHistoryFile} {
@@ -91,7 +90,7 @@ func main() {
 			log.Fatalf("** %v", err)
 		}
 	} else if commitMode {
-		if _, err := commitAndPushContentMarkdown(context.Background(), "content changes"); err != nil {
+		if _, err := commitAndPushAllChanges(context.Background(), "changes"); err != nil {
 			log.Fatalf("** %v", err)
 		}
 	} else if health48 {

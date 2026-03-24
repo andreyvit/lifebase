@@ -8,25 +8,11 @@ import (
 
 func TestDiscoverLogSpecs(t *testing.T) {
 	oldRootDir := rootDir
-	oldRawInputsDir := rawInputsDir
-	oldPromptsDir := promptsDir
-	oldIgnoreSet := contentIgnoreSet
 	t.Cleanup(func() {
 		rootDir = oldRootDir
-		rawInputsDir = oldRawInputsDir
-		promptsDir = oldPromptsDir
-		contentIgnoreSet = oldIgnoreSet
 	})
 
 	rootDir = t.TempDir()
-	rawInputsDir = ""
-	promptsDir = ""
-
-	var err error
-	contentIgnoreSet, err = buildPathSet(builtinIgnores)
-	if err != nil {
-		t.Fatalf("buildPathSet: %v", err)
-	}
 
 	files := []string{
 		"Logs/StoolLog.md",
@@ -35,6 +21,7 @@ func TestDiscoverLogSpecs(t *testing.T) {
 		"Other/FooLog-2026-03.md",
 		"Other/FooLog-2026-03-brief.md",
 		".hidden/HiddenLog.md",
+		"Deep/1/2/3/4/5/TooDeepLog.md",
 	}
 	for _, rel := range files {
 		full := filepath.Join(rootDir, filepath.FromSlash(rel))
@@ -67,5 +54,8 @@ func TestDiscoverLogSpecs(t *testing.T) {
 	}
 	if spec := got["StoolLog"]; spec.DirRelPath != "Logs" || spec.PrefaceRelPath != "Logs/StoolLog.md" {
 		t.Fatalf("StoolLog = %+v, want dir=Logs preface=Logs/StoolLog.md", spec)
+	}
+	if _, ok := got["TooDeepLog"]; ok {
+		t.Fatalf("TooDeepLog should not be discovered beyond depth %d", maxDiscoveryDepth)
 	}
 }

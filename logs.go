@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path"
@@ -67,11 +68,11 @@ type logCandidate struct {
 
 func discoverLogSpecs() ([]LogSpec, error) {
 	var candidates []logCandidate
-	if err := walkContentFiles(func(name, relPath string, lastMod time.Time) {
+	if err := walkVisibleFiles(maxDiscoveryDepth, func(relPath string, entry fs.DirEntry) error {
 		base := path.Base(relPath)
 		m := logFileNamePattern.FindStringSubmatch(base)
 		if m == nil {
-			return
+			return nil
 		}
 		dir := path.Dir(relPath)
 		if dir == "" {
@@ -83,6 +84,7 @@ func discoverLogSpecs() ([]LogSpec, error) {
 			RelPath:      relPath,
 			HasPreface:   m[2] == "",
 		})
+		return nil
 	}); err != nil {
 		return nil, err
 	}
