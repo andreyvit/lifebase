@@ -53,6 +53,7 @@ func main() {
 	flag.Parse()
 
 	ensure(decodeUserFile(configFile, &config))
+	applyConfigDefaults(&config)
 	if config.DayBoundaryHour < 0 || config.DayBoundaryHour > 23 {
 		log.Fatalf("lifebase configuration error: day_boundary_hour must be between 0 and 23")
 	}
