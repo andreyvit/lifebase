@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.telegram-mcp</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/ABSOLUTE/PATH/TO/telegram-mcp-venv-python</string>
+		<string>/ABSOLUTE/PATH/TO/YOUR/REPO/.claude/bin/telegram_mcp_http.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/ABSOLUTE/PATH/TO/YOUR/REPO</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/your-user</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/your-user/Library/Logs/telegram-mcp.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/your-user/Library/Logs/telegram-mcp.stderr.log</string>
+</dict>
+</plist>

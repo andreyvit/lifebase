@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.fastmail-mcp</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/deno</string>
+		<string>run</string>
+		<string>--allow-read=/ABSOLUTE/PATH/TO/YOUR/REPO/.claude/settings.local.json</string>
+		<string>--allow-net=127.0.0.1:43124,api.fastmail.com,jsr.io,registry.npmjs.org</string>
+		<string>/ABSOLUTE/PATH/TO/YOUR/REPO/.claude/bin/fastmail_mcp_http.ts</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/ABSOLUTE/PATH/TO/YOUR/REPO</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/your-user</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/Users/your-user/Library/Logs/fastmail-mcp.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/your-user/Library/Logs/fastmail-mcp.stderr.log</string>
+</dict>
+</plist>
