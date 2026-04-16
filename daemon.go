@@ -16,13 +16,16 @@ type ingestTaskType int
 const (
 	taskAudioFile ingestTaskType = iota
 	taskRawInput
+	taskTelegramAudio
+	taskTelegramText
 )
 
 type ingestTask struct {
 	typ         ingestTaskType
 	path        string
-	displayName string // used for notifications like "Processing <name>"
-	deleteAfter bool   // delete file after successful ingestion (for Telegram temp audio)
+	displayName string
+	deleteAfter bool // delete file after successful ingestion (for Telegram temp audio)
+	imagePaths  []string
 }
 
 // daemon starts watchers and a single worker that serializes ingestion.
@@ -39,15 +42,15 @@ func daemon(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case t := <-tasks:
-				if t.typ == taskAudioFile && t.displayName != "" {
-					_ = sendTelegramText(ctx, "Processing "+t.displayName)
-				}
-				if err := add(ctx, t.path); err != nil {
+				stopActivity := startTelegramActivityIndicator(ctx, t)
+				if err := processIngestTask(ctx, t); err != nil {
+					stopActivity()
 					// Report error via Telegram, do not crash
 					_ = sendTelegramText(ctx, "Ingest failed for "+filepath.Base(t.path)+": "+err.Error())
 					log.Printf("Ingest failed: %v", err)
 					continue
 				}
+				stopActivity()
 				if t.deleteAfter {
 					if err := os.Remove(t.path); err != nil {
 						log.Printf("Cleanup: failed to remove temp file %s: %v", t.path, err)
@@ -72,6 +75,67 @@ func daemon(ctx context.Context) error {
 	// Block forever until context is cancelled
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+const telegramActivityInterval = 4 * time.Second
+
+func startTelegramActivityIndicator(parent context.Context, task ingestTask) func() {
+	if !shouldSendTelegramActivity(task) {
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	go runTelegramActivityIndicator(ctx, telegramActivityInterval, func(ctx context.Context) error {
+		return sendTelegramChatAction(ctx, "typing")
+	})
+	return cancel
+}
+
+func shouldSendTelegramActivity(task ingestTask) bool {
+	switch task.typ {
+	case taskTelegramAudio, taskTelegramText:
+		return true
+	case taskAudioFile:
+		return task.deleteAfter
+	default:
+		return false
+	}
+}
+
+func runTelegramActivityIndicator(ctx context.Context, interval time.Duration, send func(context.Context) error) {
+	if err := send(ctx); err != nil {
+		log.Printf("Telegram chat action failed: %v", err)
+	}
+	if interval <= 0 {
+		<-ctx.Done()
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := send(ctx); err != nil {
+				log.Printf("Telegram chat action failed: %v", err)
+			}
+		}
+	}
+}
+
+func processIngestTask(ctx context.Context, task ingestTask) error {
+	switch task.typ {
+	case taskAudioFile, taskRawInput:
+		return add(ctx, task.path)
+	case taskTelegramAudio:
+		return addTelegramAudio(ctx, task.path, task.imagePaths)
+	case taskTelegramText:
+		return addTelegramText(ctx, task.path, task.imagePaths)
+	default:
+		return nil
+	}
 }
 
 func checkDaemonDependencies() {

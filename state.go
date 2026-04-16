@@ -22,7 +22,10 @@ type State struct {
 	ProactiveLastRun map[string]time.Time `json:"proactive_last_run"`
 	// PendingLog holds a pending log entry request awaiting next message text.
 	PendingLog *PendingLogInput `json:"pending_log,omitempty"`
-	// LastIncomingAt stores the timestamp of the last incoming item (recording or Telegram voice/text, excluding commands).
+	// PendingTelegramImages holds uncaptained Telegram images waiting for the next text, voice,
+	// or captioned image batch.
+	PendingTelegramImages []PendingTelegramImage `json:"pending_telegram_images,omitempty"`
+	// LastIncomingAt stores the timestamp of the last incoming item (recording or Telegram voice/text/image, excluding commands).
 	LastIncomingAt time.Time `json:"last_incoming_at,omitzero"`
 	// ClaudeSession is the active Claude Code session for automation runs; it is rotated daily.
 	ClaudeSession SessionState `json:"claude_session,omitzero"`
@@ -110,6 +113,11 @@ type PendingLogInput struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
+type PendingTelegramImage struct {
+	Path       string    `json:"path"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
 // ReadState provides read-only access to the current state under shared lock.
 // Do not mutate the state inside the callback.
 func ReadState(f func(state *State)) {
@@ -178,4 +186,56 @@ func updateLastIncoming(t time.Time) {
 			s.LastIncomingAt = t
 		}
 	})
+}
+
+func pendingTelegramImagePaths() []string {
+	var out []string
+	ReadState(func(s *State) {
+		out = make([]string, 0, len(s.PendingTelegramImages))
+		for _, img := range s.PendingTelegramImages {
+			if p := strings.TrimSpace(img.Path); p != "" {
+				out = append(out, p)
+			}
+		}
+	})
+	return out
+}
+
+func appendPendingTelegramImages(images []PendingTelegramImage) {
+	if len(images) == 0 {
+		return
+	}
+	UpdateState(func(s *State) {
+		for _, img := range images {
+			if p := strings.TrimSpace(img.Path); p != "" {
+				s.PendingTelegramImages = append(s.PendingTelegramImages, PendingTelegramImage{
+					Path:       p,
+					ReceivedAt: img.ReceivedAt.Local(),
+				})
+			}
+		}
+	})
+}
+
+func clearPendingTelegramImages() bool {
+	var hadPending bool
+	UpdateState(func(s *State) {
+		hadPending = len(s.PendingTelegramImages) > 0
+		s.PendingTelegramImages = nil
+	})
+	return hadPending
+}
+
+func takePendingTelegramImagePaths() []string {
+	var out []string
+	UpdateState(func(s *State) {
+		out = make([]string, 0, len(s.PendingTelegramImages))
+		for _, img := range s.PendingTelegramImages {
+			if p := strings.TrimSpace(img.Path); p != "" {
+				out = append(out, p)
+			}
+		}
+		s.PendingTelegramImages = nil
+	})
+	return out
 }

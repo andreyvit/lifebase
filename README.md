@@ -203,8 +203,178 @@ Once Telegram is configured and the daemon is running, you can:
 
 - send text messages
 - send voice notes
+- send photos or image files
 - use slash commands like `/morning`
 - use built-ins like `/pause`, `/resume`, `/new`, `/commit`, and `/health`
+
+Image behavior:
+
+- images are saved into `Raw/` immediately
+- captioned images are ingested right away
+- uncaptained images wait until your next text, voice note, or captioned image batch
+- plain Telegram text is wrapped in `<telegram-message>...</telegram-message>`
+- attached images are prepended as `<attached-image path="..."/>` tags
+
+
+### Telegram MCP for Claude
+
+This is optional and separate from the Telegram bot integration above.
+
+Use this if you want Claude Code itself to access your Telegram account via MCP inside a repo such as your LifeBase content repo.
+
+Important: for short-lived `claude -p` runs, a plain stdio Telegram MCP server is often too slow. `telegram-mcp` starts a Telegram client and warms chat state before tools are ready, so the robust setup is a persistent local HTTP daemon and a project `.mcp.json` that points to it.
+
+Install the MCP server:
+
+```sh
+uv tool install git+https://github.com/chigwell/telegram-mcp
+```
+
+Generate a Telegram session string:
+
+```sh
+export TELEGRAM_API_ID=123456
+export TELEGRAM_API_HASH=your_api_hash_here
+telegram-mcp-generate-session
+```
+
+Project `.mcp.json` example:
+
+```json
+{
+  "mcpServers": {
+    "telegram": {
+      "type": "http",
+      "url": "http://127.0.0.1:43123/mcp"
+    }
+  }
+}
+```
+
+Merge that into your existing `.mcp.json`; do not replace unrelated servers such as `things`.
+
+Project `.claude/settings.local.json` example:
+
+```json
+{
+  "env": {
+    "TELEGRAM_API_ID": "123456",
+    "TELEGRAM_API_HASH": "your_api_hash_here",
+    "TELEGRAM_SESSION_STRING": "your_session_string_here"
+  },
+  "permissions": {
+    "allow": [
+      "mcp__telegram__*"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
+```
+
+Recommended repo-local files:
+
+- `.claude/settings.local.json` should stay untracked and ignored
+- `.mcp.json` should keep the MCP endpoint definition
+- run a local LaunchAgent so the Telegram MCP server stays warm between Claude invocations
+
+Example wrapper script and LaunchAgent are included here:
+
+- [`example/.claude/bin/telegram_mcp_http.py`](example/.claude/bin/telegram_mcp_http.py)
+- [`example/.claude/launchd/com.example.telegram-mcp.plist`](example/.claude/launchd/com.example.telegram-mcp.plist)
+
+Typical flow:
+
+1. Copy the example wrapper script into your real repo under `.claude/bin/`.
+2. Copy the example plist into `~/Library/LaunchAgents/` and update the paths and label.
+3. Put your real Telegram secrets in `.claude/settings.local.json`.
+4. Point your repo `.mcp.json` at `http://127.0.0.1:43123/mcp`.
+5. Load the agent:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.telegram-mcp.plist
+```
+
+After that, `claude mcp list` should show the Telegram server as connected, and one-shot `claude -p` runs should see Telegram tools immediately.
+
+
+### Fastmail JMAP MCP for Claude
+
+This is the same warm-daemon pattern as Telegram, but for Fastmail via JMAP.
+
+Use this if you want Claude Code to access your Fastmail account from inside a repo. For short-lived `claude -p` runs, a plain stdio `jmap-mcp` process is not reliable enough because it has to initialize the JMAP session before tools become available. The robust setup is a persistent local HTTP daemon plus a project `.mcp.json`.
+
+Install Deno:
+
+```sh
+brew install deno
+```
+
+No separate clone is required. The wrapper script below imports `wyattjoh/jmap-mcp` directly from JSR on first start.
+
+Project `.mcp.json` example:
+
+```json
+{
+  "mcpServers": {
+    "fastmail": {
+      "type": "http",
+      "url": "http://127.0.0.1:43124/mcp"
+    }
+  }
+}
+```
+
+Project `.claude/settings.local.json` example:
+
+```json
+{
+  "env": {
+    "JMAP_SESSION_URL": "https://api.fastmail.com/jmap/session",
+    "JMAP_BEARER_TOKEN": "your_fastmail_api_token_here"
+  },
+  "permissions": {
+    "allow": [
+      "mcp__fastmail__*"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
+```
+
+`JMAP_ACCOUNT_ID` is optional. Most Fastmail setups can omit it and let the wrapper auto-detect the primary account.
+
+Recommended repo-local files:
+
+- `.claude/settings.local.json` should stay untracked and ignored
+- `.mcp.json` should keep only the MCP endpoint definition
+- run a local LaunchAgent so the Fastmail MCP server stays warm between Claude invocations
+
+Example wrapper script and LaunchAgent are included here:
+
+- [`example/.claude/bin/fastmail_mcp_http.ts`](example/.claude/bin/fastmail_mcp_http.ts)
+- [`example/.claude/launchd/com.example.fastmail-mcp.plist`](example/.claude/launchd/com.example.fastmail-mcp.plist)
+
+Typical flow:
+
+1. Copy the example wrapper script into your real repo under `.claude/bin/`.
+2. Copy the example plist into `~/Library/LaunchAgents/` and update the paths and label.
+3. Put your real Fastmail secrets in `.claude/settings.local.json`.
+4. Point your repo `.mcp.json` at `http://127.0.0.1:43124/mcp`.
+5. Load the agent:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.fastmail-mcp.plist
+```
+
+If you want to prefetch dependencies before launchd starts it, run:
+
+```sh
+deno cache /ABSOLUTE/PATH/TO/YOUR/REPO/.claude/bin/fastmail_mcp_http.ts
+```
+
+After that, `claude mcp list` should show the Fastmail server as connected, and one-shot `claude -p` runs should see Fastmail tools immediately.
 
 
 ### Watched audio recorder folder
@@ -256,6 +426,7 @@ Every incoming note goes through:
 - `AGENTS.md`
 
 `system-ingest.md` is the short operational prompt for message handling.
+For Telegram inputs, it may receive `<attached-image .../>` tags plus either `<telegram-message>` text or `<voice-memo-transcription>`.
 
 `AGENTS.md` is the long-form instruction file describing:
 

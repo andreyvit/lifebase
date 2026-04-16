@@ -1,4 +1,10 @@
-Read the user's transcription and act.
+Read the user's message and act.
+
+The input may start with zero or more `<attached-image path="..."/>` tags. Inspect those images when present.
+
+Plain Telegram text and image captions are wrapped in `<telegram-message>...</telegram-message>`.
+
+Voice notes arrive in `<voice-memo-transcription>...</voice-memo-transcription>`.
 
 Before doing anything else, read AGENTS.md.
 

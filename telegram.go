@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +67,13 @@ func sendTelegramTextRaw(ctx context.Context, text string) error {
 	return nil
 }
 
+func sendTelegramChatAction(ctx context.Context, action string) error {
+	if strings.TrimSpace(secrets.TelegramBotToken) == "" || strings.TrimSpace(secrets.TelegramChatID) == "" {
+		return fmt.Errorf("telegram not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in secrets file")
+	}
+	return telegramSendChatAction(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, action)
+}
+
 func telegramSendMessage(ctx context.Context, botToken, chatID, text string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload := map[string]any{
@@ -82,6 +90,37 @@ func telegramSendMessage(ctx context.Context, botToken, chatID, text string) err
 	req.Header.Set("Content-Type", "application/json")
 
 	cli := &http.Client{Timeout: 2 * time.Minute}
+	res, err := cli.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	respBody, _ := io.ReadAll(res.Body)
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		msg := string(respBody)
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
+		}
+		return fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+	}
+	return nil
+}
+
+func telegramSendChatAction(ctx context.Context, botToken, chatID, action string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendChatAction", botToken)
+	payload := map[string]any{
+		"chat_id": chatID,
+		"action":  action,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	cli := &http.Client{Timeout: 30 * time.Second}
 	res, err := cli.Do(req)
 	if err != nil {
 		return err
@@ -124,6 +163,7 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 	base := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", secrets.TelegramBotToken)
 	cli := &http.Client{Timeout: 70 * time.Second}
 	var offset int64 = 0
+	mediaGroups := map[string]*pendingTelegramMediaGroup{}
 	log.Printf("Polling Telegram updates…")
 
 	// Ensure bot commands are set (pause/resume and proactive items)
@@ -136,8 +176,11 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 			return
 		default:
 		}
+		if err := processTelegramImageBatches(ctx, tasks, takeReadyTelegramMediaGroups(mediaGroups, time.Now(), false)); err != nil {
+			log.Printf("Telegram: media group flush failed: %v", err)
+		}
 		q := url.Values{}
-		q.Set("timeout", "50")
+		q.Set("timeout", strconv.Itoa(telegramPollTimeoutSeconds(mediaGroups, time.Now())))
 		if offset > 0 {
 			q.Set("offset", strconv.FormatInt(offset, 10))
 		}
@@ -178,6 +221,32 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 				// Ignore messages from other chats/users (or all, if not configured correctly)
 				continue
 			}
+			imageBatch, err := telegramSaveImageBatch(ctx, msg)
+			if err != nil {
+				log.Printf("Telegram: image intake failed: %v", err)
+				_ = sendTelegramText(ctx, fmt.Sprintf("Telegram image intake failed: %v", err))
+				continue
+			}
+			if imageBatch != nil {
+				if imageBatch.MediaGroupID != "" {
+					if err := processTelegramImageBatches(ctx, tasks, takeOtherTelegramMediaGroups(mediaGroups, imageBatch.MediaGroupID)); err != nil {
+						log.Printf("Telegram: media group flush failed: %v", err)
+					}
+					addTelegramMediaGroupBatch(mediaGroups, *imageBatch)
+				} else {
+					if err := processTelegramImageBatches(ctx, tasks, takeAllTelegramMediaGroups(mediaGroups)); err != nil {
+						log.Printf("Telegram: media group flush failed: %v", err)
+					}
+					if err := processTelegramImageBatch(ctx, tasks, *imageBatch); err != nil {
+						log.Printf("Telegram: image batch failed: %v", err)
+						_ = sendTelegramText(ctx, fmt.Sprintf("Telegram image batch failed: %v", err))
+					}
+				}
+				continue
+			}
+			if err := processTelegramImageBatches(ctx, tasks, takeAllTelegramMediaGroups(mediaGroups)); err != nil {
+				log.Printf("Telegram: media group flush failed: %v", err)
+			}
 			// Audio messages
 			if msg.Voice != nil {
 				filePath, err := telegramGetFilePath(ctx, secrets.TelegramBotToken, msg.Voice.FileID)
@@ -195,7 +264,12 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 				// Update last incoming time using Telegram message date
 				updateLastIncoming(time.Unix(msg.Date, 0))
 				log.Printf("New Telegram voice -> %s", filepath.Base(tmp))
-				tasks <- ingestTask{typ: taskAudioFile, path: tmp, displayName: "voice message", deleteAfter: true}
+				task := ingestTask{typ: taskAudioFile, path: tmp, displayName: "voice message", deleteAfter: true}
+				if imagePaths := takePendingTelegramImagePaths(); len(imagePaths) > 0 {
+					task.typ = taskTelegramAudio
+					task.imagePaths = imagePaths
+				}
+				tasks <- task
 				continue
 			}
 			if msg.Audio != nil {
@@ -218,7 +292,12 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 				// Update last incoming time using Telegram message date
 				updateLastIncoming(time.Unix(msg.Date, 0))
 				log.Printf("New Telegram audio -> %s", filepath.Base(tmp))
-				tasks <- ingestTask{typ: taskAudioFile, path: tmp, displayName: disp, deleteAfter: true}
+				task := ingestTask{typ: taskAudioFile, path: tmp, displayName: disp, deleteAfter: true}
+				if imagePaths := takePendingTelegramImagePaths(); len(imagePaths) > 0 {
+					task.typ = taskTelegramAudio
+					task.imagePaths = imagePaths
+				}
+				tasks <- task
 				continue
 			}
 			// Text messages
@@ -276,8 +355,14 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 				_ = sendTelegramText(ctx, fmt.Sprintf("Telegram ingest failed writing raw input: %v", err))
 				continue
 			}
-			log.Printf("New Telegram message -> %s", filepath.Base(fn))
-			tasks <- ingestTask{typ: taskRawInput, path: fn, displayName: filepath.Base(fn)}
+			task := ingestTask{typ: taskTelegramText, path: fn, displayName: filepath.Base(fn)}
+			if imagePaths := takePendingTelegramImagePaths(); len(imagePaths) > 0 {
+				task.imagePaths = imagePaths
+				log.Printf("New Telegram message with %d queued images -> %s", len(imagePaths), filepath.Base(fn))
+			} else {
+				log.Printf("New Telegram message -> %s", filepath.Base(fn))
+			}
+			tasks <- task
 		}
 	}
 }
@@ -357,8 +442,13 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		return true
 	case "cancel":
 		var hadPending bool
-		ReadState(func(st *State) { hadPending = st.PendingLog != nil })
-		UpdateState(func(st *State) { st.PendingLog = nil })
+		ReadState(func(st *State) {
+			hadPending = st.PendingLog != nil || len(st.PendingTelegramImages) > 0
+		})
+		UpdateState(func(st *State) {
+			st.PendingLog = nil
+			st.PendingTelegramImages = nil
+		})
 		if hadPending {
 			_ = sendTelegramText(ctx, "Canceled pending input.")
 		} else {
@@ -573,6 +663,23 @@ func telegramSetMyCommands(ctx context.Context, botToken string, commands []tgBo
 	return nil
 }
 
+const (
+	defaultTelegramLongPollTimeoutSeconds = 50
+	telegramMediaGroupFlushAfter          = 1500 * time.Millisecond
+)
+
+type telegramImageBatch struct {
+	ReceivedAt   time.Time
+	MediaGroupID string
+	Caption      string
+	ImagePaths   []string
+}
+
+type pendingTelegramMediaGroup struct {
+	Batch    telegramImageBatch
+	LastSeen time.Time
+}
+
 type tgUpdates struct {
 	Ok     bool       `json:"ok"`
 	Result []tgUpdate `json:"result"`
@@ -584,17 +691,28 @@ type tgUpdate struct {
 }
 
 type tgMessage struct {
-	MessageID int      `json:"message_id"`
-	Date      int64    `json:"date"`
-	Chat      tgChat   `json:"chat"`
-	Text      string   `json:"text"`
-	Voice     *tgVoice `json:"voice,omitempty"`
-	Audio     *tgAudio `json:"audio,omitempty"`
+	MessageID    int           `json:"message_id"`
+	Date         int64         `json:"date"`
+	Chat         tgChat        `json:"chat"`
+	Text         string        `json:"text"`
+	Caption      string        `json:"caption,omitempty"`
+	MediaGroupID string        `json:"media_group_id,omitempty"`
+	Photo        []tgPhotoSize `json:"photo,omitempty"`
+	Voice        *tgVoice      `json:"voice,omitempty"`
+	Audio        *tgAudio      `json:"audio,omitempty"`
+	Document     *tgDocument   `json:"document,omitempty"`
 }
 
 type tgChat struct {
 	ID   int64  `json:"id"`
 	Type string `json:"type"`
+}
+
+type tgPhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
 }
 
 type tgVoice struct {
@@ -604,6 +722,13 @@ type tgVoice struct {
 }
 
 type tgAudio struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
+}
+
+type tgDocument struct {
 	FileID   string `json:"file_id"`
 	FileName string `json:"file_name,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
@@ -620,6 +745,228 @@ type tgFileInfo struct {
 	FileID   string `json:"file_id"`
 	FilePath string `json:"file_path"`
 	FileSize int    `json:"file_size"`
+}
+
+func telegramPollTimeoutSeconds(groups map[string]*pendingTelegramMediaGroup, now time.Time) int {
+	timeout := defaultTelegramLongPollTimeoutSeconds
+	var wait time.Duration
+	var havePending bool
+	for _, group := range groups {
+		untilFlush := group.LastSeen.Add(telegramMediaGroupFlushAfter).Sub(now)
+		if untilFlush <= 0 {
+			return 1
+		}
+		if !havePending || untilFlush < wait {
+			wait = untilFlush
+			havePending = true
+		}
+	}
+	if !havePending {
+		return timeout
+	}
+	secs := int((wait + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	if secs < timeout {
+		timeout = secs
+	}
+	return timeout
+}
+
+func addTelegramMediaGroupBatch(groups map[string]*pendingTelegramMediaGroup, batch telegramImageBatch) {
+	groupID := strings.TrimSpace(batch.MediaGroupID)
+	if groupID == "" {
+		return
+	}
+	existing := groups[groupID]
+	if existing == nil {
+		groups[groupID] = &pendingTelegramMediaGroup{
+			Batch: telegramImageBatch{
+				ReceivedAt:   batch.ReceivedAt,
+				MediaGroupID: groupID,
+				Caption:      strings.TrimSpace(batch.Caption),
+				ImagePaths:   append([]string(nil), batch.ImagePaths...),
+			},
+			LastSeen: batch.ReceivedAt,
+		}
+		return
+	}
+	if existing.Batch.ReceivedAt.IsZero() || batch.ReceivedAt.Before(existing.Batch.ReceivedAt) {
+		existing.Batch.ReceivedAt = batch.ReceivedAt
+	}
+	if existing.Batch.Caption == "" && strings.TrimSpace(batch.Caption) != "" {
+		existing.Batch.Caption = strings.TrimSpace(batch.Caption)
+	}
+	existing.Batch.ImagePaths = append(existing.Batch.ImagePaths, batch.ImagePaths...)
+	existing.LastSeen = batch.ReceivedAt
+}
+
+func takeReadyTelegramMediaGroups(groups map[string]*pendingTelegramMediaGroup, now time.Time, forceAll bool) []telegramImageBatch {
+	var batches []telegramImageBatch
+	for groupID, group := range groups {
+		if forceAll || !group.LastSeen.Add(telegramMediaGroupFlushAfter).After(now) {
+			batches = append(batches, group.Batch)
+			delete(groups, groupID)
+		}
+	}
+	sortTelegramImageBatches(batches)
+	return batches
+}
+
+func takeAllTelegramMediaGroups(groups map[string]*pendingTelegramMediaGroup) []telegramImageBatch {
+	return takeReadyTelegramMediaGroups(groups, time.Now(), true)
+}
+
+func takeOtherTelegramMediaGroups(groups map[string]*pendingTelegramMediaGroup, keepGroupID string) []telegramImageBatch {
+	var batches []telegramImageBatch
+	for groupID, group := range groups {
+		if groupID == keepGroupID {
+			continue
+		}
+		batches = append(batches, group.Batch)
+		delete(groups, groupID)
+	}
+	sortTelegramImageBatches(batches)
+	return batches
+}
+
+func sortTelegramImageBatches(batches []telegramImageBatch) {
+	sort.Slice(batches, func(i, j int) bool {
+		if batches[i].ReceivedAt.Equal(batches[j].ReceivedAt) {
+			return batches[i].MediaGroupID < batches[j].MediaGroupID
+		}
+		return batches[i].ReceivedAt.Before(batches[j].ReceivedAt)
+	})
+}
+
+func processTelegramImageBatches(ctx context.Context, tasks chan<- ingestTask, batches []telegramImageBatch) error {
+	var firstErr error
+	for _, batch := range batches {
+		if err := processTelegramImageBatch(ctx, tasks, batch); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func processTelegramImageBatch(ctx context.Context, tasks chan<- ingestTask, batch telegramImageBatch) error {
+	if len(batch.ImagePaths) == 0 {
+		return nil
+	}
+	tm := batch.ReceivedAt.Local()
+	updateLastIncoming(tm)
+
+	caption := strings.TrimSpace(batch.Caption)
+	if caption == "" {
+		pending := make([]PendingTelegramImage, 0, len(batch.ImagePaths))
+		for _, path := range batch.ImagePaths {
+			if p := strings.TrimSpace(path); p != "" {
+				pending = append(pending, PendingTelegramImage{Path: p, ReceivedAt: tm})
+			}
+		}
+		appendPendingTelegramImages(pending)
+		log.Printf("Queued Telegram image batch (%d images)", len(pending))
+		return nil
+	}
+
+	fn := uniqueRawInputPath(tm, "tg")
+	if err := os.WriteFile(fn, []byte(caption+"\n"), 0666); err != nil {
+		return fmt.Errorf("write telegram caption raw input: %w", err)
+	}
+	imagePaths := append(takePendingTelegramImagePaths(), batch.ImagePaths...)
+	log.Printf("New Telegram captioned image batch -> %s (%d images)", filepath.Base(fn), len(imagePaths))
+	tasks <- ingestTask{typ: taskTelegramText, path: fn, displayName: filepath.Base(fn), imagePaths: imagePaths}
+	return nil
+}
+
+func telegramSaveImageBatch(ctx context.Context, msg *tgMessage) (*telegramImageBatch, error) {
+	var fileID string
+	var fallbackName string
+	var mimeType string
+
+	if photo := largestTelegramPhoto(msg.Photo); photo != nil {
+		fileID = photo.FileID
+	} else if telegramDocumentIsImage(msg.Document) {
+		fileID = msg.Document.FileID
+		fallbackName = msg.Document.FileName
+		mimeType = msg.Document.MimeType
+	} else {
+		return nil, nil
+	}
+
+	filePath, err := telegramGetFilePath(ctx, secrets.TelegramBotToken, fileID)
+	if err != nil {
+		return nil, err
+	}
+
+	tm := time.Unix(msg.Date, 0).Local()
+	dest := uniqueRawPath(tm, "tg-img", telegramImageExt(filePath, fallbackName, mimeType))
+	if err := telegramDownloadToPath(ctx, secrets.TelegramBotToken, filePath, dest); err != nil {
+		return nil, err
+	}
+
+	return &telegramImageBatch{
+		ReceivedAt:   tm,
+		MediaGroupID: strings.TrimSpace(msg.MediaGroupID),
+		Caption:      strings.TrimSpace(msg.Caption),
+		ImagePaths:   []string{dest},
+	}, nil
+}
+
+func largestTelegramPhoto(photos []tgPhotoSize) *tgPhotoSize {
+	if len(photos) == 0 {
+		return nil
+	}
+	best := &photos[0]
+	bestScore := best.Width * best.Height
+	for i := 1; i < len(photos); i++ {
+		score := photos[i].Width * photos[i].Height
+		if score > bestScore || (score == bestScore && photos[i].FileSize > best.FileSize) {
+			best = &photos[i]
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func telegramDocumentIsImage(doc *tgDocument) bool {
+	if doc == nil {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(doc.MimeType)), "image/") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(filepath.Ext(doc.FileName))) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tif", ".tiff":
+		return true
+	default:
+		return false
+	}
+}
+
+func telegramImageExt(filePath, fallbackName, mimeType string) string {
+	for _, candidate := range []string{filePath, fallbackName} {
+		if ext := strings.ToLower(strings.TrimSpace(filepath.Ext(candidate))); ext != "" {
+			return ext
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/heic":
+		return ".heic"
+	case "image/heif":
+		return ".heif"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".jpg"
+	}
 }
 
 func telegramGetFilePath(ctx context.Context, token, fileID string) (string, error) {
@@ -652,50 +999,85 @@ func telegramGetFilePath(ctx context.Context, token, fileID string) (string, err
 	return resp.Result.FilePath, nil
 }
 
-func telegramDownloadToTemp(ctx context.Context, token, filePath string) (string, error) {
+func telegramDownloadToPath(ctx context.Context, token, filePath, destPath string) error {
 	u := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", token, filePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return err
 	}
 	cli := &http.Client{Timeout: 5 * time.Minute}
 	res, err := cli.Do(req)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		b, _ := io.ReadAll(res.Body)
-		return "", fmt.Errorf("download HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+		return fmt.Errorf("download HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
 	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o777); err != nil {
+		return err
+	}
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, res.Body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(destPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(destPath)
+		return err
+	}
+	return nil
+}
+
+func telegramDownloadToTemp(ctx context.Context, token, filePath string) (string, error) {
 	ext := filepath.Ext(filePath)
 	if ext == "" {
 		ext = ".ogg"
 	}
-	// os.CreateTemp allows patterns with extensions
-	f, err := os.CreateTemp("", "tg-audio-*"+ext)
+	f, err := os.CreateTemp("", "tg-download-*"+ext)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, res.Body); err != nil {
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
 		return "", err
 	}
-	return f.Name(), nil
+	if err := telegramDownloadToPath(ctx, token, filePath, path); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func uniqueRawInputPath(t time.Time, suffix string) string {
+	return uniqueRawPath(t, suffix, ".md")
+}
+
+func uniqueRawPath(t time.Time, suffix, ext string) string {
 	base := t.Format(rawFileTimeFormat)
 	if suffix != "" {
 		base = base + "-" + suffix
 	}
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		ext = ".bin"
+	}
+	if !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
 	// ensure unique by appending -1, -2 if needed
-	candidate := filepath.Join(rawInputsDir, base+".md")
+	candidate := filepath.Join(rawInputsDir, base+ext)
 	for i := 1; ; i++ {
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
 			return candidate
 		}
-		candidate = filepath.Join(rawInputsDir, fmt.Sprintf("%s-%d.md", base, i))
+		candidate = filepath.Join(rawInputsDir, fmt.Sprintf("%s-%d%s", base, i, ext))
 	}
 }
 

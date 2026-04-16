@@ -120,6 +120,30 @@ func main() {
 }
 
 func add(ctx context.Context, fn string) error {
+	_, transcription, err := prepareIngestText(ctx, fn)
+	if err != nil {
+		return err
+	}
+	return runIngestText(ctx, nil, "voice-memo-transcription", transcription)
+}
+
+func addTelegramText(ctx context.Context, fn string, imagePaths []string) error {
+	raw, err := os.ReadFile(fn)
+	if err != nil {
+		return fmt.Errorf("read telegram message: %v", err)
+	}
+	return runIngestText(ctx, imagePaths, "telegram-message", strings.TrimSpace(string(raw)))
+}
+
+func addTelegramAudio(ctx context.Context, fn string, imagePaths []string) error {
+	_, transcription, err := prepareIngestText(ctx, fn)
+	if err != nil {
+		return err
+	}
+	return runIngestText(ctx, imagePaths, "voice-memo-transcription", transcription)
+}
+
+func prepareIngestText(ctx context.Context, fn string) (string, string, error) {
 	fn = must(filepath.Abs(fn))
 	tm := must(os.Stat(fn)).ModTime().Local().Format(rawFileTimeFormat)
 	transcriptionFn := filepath.Join(rawInputsDir, fmt.Sprintf("%s.md", tm))
@@ -134,7 +158,7 @@ func add(ctx context.Context, fn string) error {
 		log.Printf("Transcribing %s...", filepath.Base(fn))
 		text, err := transcribe(ctx, fn)
 		if err != nil {
-			return fmt.Errorf("transcribe: %v", err)
+			return "", "", fmt.Errorf("transcribe: %v", err)
 		}
 		text = strings.TrimSpace(text) + "\n"
 
@@ -144,11 +168,19 @@ func add(ctx context.Context, fn string) error {
 
 	raw, err := os.ReadFile(transcriptionFn)
 	if err != nil {
-		return fmt.Errorf("read transcription: %v", err)
+		return "", "", fmt.Errorf("read transcription: %v", err)
 	}
 	transcription := strings.TrimSpace(string(raw))
+	return transcriptionFn, transcription, nil
+}
 
-	claudeOut, err := runIngestModel(ctx, fmt.Sprintf("<voice-memo-transcription>\n%s\n</voice-memo-transcription>\n\n"+readPrompt("system-ingest.md"), transcription))
+func runIngestText(ctx context.Context, imagePaths []string, textTag, text string) error {
+	prompt, err := buildIngestPrompt(imagePaths, textTag, text)
+	if err != nil {
+		return fmt.Errorf("build ingest prompt: %v", err)
+	}
+
+	claudeOut, err := runIngestModel(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("ingestion: %v", err)
 	}
@@ -168,6 +200,53 @@ func add(ctx context.Context, fn string) error {
 	log.Printf("Sent Claude output to Telegram (%d chars)", len(claudeOut))
 
 	return nil
+}
+
+func buildIngestPrompt(imagePaths []string, textTag, text string) (string, error) {
+	input, err := buildIngestInputBlock(imagePaths, textTag, text)
+	if err != nil {
+		return "", err
+	}
+	return input + "\n\n" + readPrompt("system-ingest.md"), nil
+}
+
+func buildIngestInputBlock(imagePaths []string, textTag, text string) (string, error) {
+	textTag = strings.TrimSpace(textTag)
+	if textTag == "" {
+		return "", fmt.Errorf("text tag is empty")
+	}
+
+	text = strings.TrimSpace(text)
+	var parts []string
+	for _, path := range imagePaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, fmt.Sprintf(`<attached-image path="%s"/>`, escapeTagAttr(absPath)))
+	}
+
+	switch textTag {
+	case "telegram-message":
+		parts = append(parts, "<telegram-message>"+text+"</telegram-message>")
+	default:
+		parts = append(parts, fmt.Sprintf("<%s>\n%s\n</%s>", textTag, text, textTag))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func escapeTagAttr(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		`"`, "&quot;",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return replacer.Replace(s)
 }
 
 func shouldStartNewClaudeSession(now time.Time, sess *SessionState) bool {

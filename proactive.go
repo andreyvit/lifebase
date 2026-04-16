@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+var (
+	proactiveModelRunner    = runProactiveModel
+	proactiveTelegramSender = sendTelegramText
+	proactiveHistoryWriter  = appendProactiveRecent
+	proactiveNow            = func() time.Time { return time.Now().Local() }
+)
+
 // runProactiveByName runs a proactive item selected by a flexible name key
 // (e.g. "evening", "evening brief", or "evening.md").
 func runProactiveByName(ctx context.Context, key string) error {
@@ -34,32 +41,38 @@ func runProactivePrompt(ctx context.Context, p *Prompt, lastRunKey string) error
 	log.Printf("Proactive: running %q via %s", p.Name, p.FileName)
 	prompt := strings.TrimSpace(p.Body)
 
-	out, err := runProactiveModel(ctx, prompt, proactiveHistorySuffix(p), "")
+	out, err := proactiveModelRunner(ctx, prompt, proactiveHistorySuffix(p), "")
 	if err != nil {
 		return err
 	}
 	out = strings.TrimSpace(out)
+	ranAt := proactiveNow()
 	if out == "" {
 		log.Printf("Proactive %q produced empty output; nothing to send", p.Name)
+		markProactiveRun(lastRunKey, ranAt)
 		return nil
 	}
-	sentAt := time.Now()
-	if err := sendTelegramText(ctx, out); err != nil {
+	if err := proactiveTelegramSender(ctx, out); err != nil {
 		return fmt.Errorf("telegram send: %w", err)
 	}
 	log.Printf("Proactive %q sent (%d chars)", p.Name, len(out))
-	appendProactiveRecent(p.Name, sentAt, out)
+	proactiveHistoryWriter(p.Name, ranAt, out)
 
-	// Mark last run time so autos won't resend the same day
-	if strings.TrimSpace(lastRunKey) != "" {
-		UpdateState(func(s *State) {
-			if s.ProactiveLastRun == nil {
-				s.ProactiveLastRun = make(map[string]time.Time)
-			}
-			s.ProactiveLastRun[lastRunKey] = sentAt
-		})
-	}
+	markProactiveRun(lastRunKey, ranAt)
 	return nil
+}
+
+func markProactiveRun(lastRunKey string, at time.Time) {
+	if strings.TrimSpace(lastRunKey) == "" {
+		return
+	}
+	at = at.Local()
+	UpdateState(func(s *State) {
+		if s.ProactiveLastRun == nil {
+			s.ProactiveLastRun = make(map[string]time.Time)
+		}
+		s.ProactiveLastRun[lastRunKey] = at
+	})
 }
 
 func proactiveHistorySuffix(p *Prompt) string {
