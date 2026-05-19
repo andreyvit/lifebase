@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -22,10 +24,91 @@ func commitAndPushAllChanges(ctx context.Context, message string) (repoCommitRes
 	if !res.DidCommit {
 		return res, nil
 	}
+	if err := pullRebaseBeforePush(ctx); err != nil {
+		return repoCommitResult{}, err
+	}
+	if sha, err := runGit(ctx, "rev-parse", "HEAD"); err != nil {
+		return repoCommitResult{}, fmt.Errorf("git rev-parse HEAD after pull --rebase: %w", err)
+	} else {
+		res.CommitSHA = strings.TrimSpace(sha)
+	}
 	if _, err := runGit(ctx, "push"); err != nil {
 		return repoCommitResult{}, fmt.Errorf("git push: %w", err)
 	}
 	return res, nil
+}
+
+func pullRebaseBeforePush(ctx context.Context) error {
+	if _, err := runGit(ctx, "pull", "--rebase"); err != nil {
+		conflict, inspectErr := rebaseConflictInProgress(ctx)
+		if inspectErr != nil {
+			return fmt.Errorf("git pull --rebase: %w; inspecting rebase state: %v", err, inspectErr)
+		}
+		if !conflict {
+			return fmt.Errorf("git pull --rebase: %w", err)
+		}
+
+		if resolveErr := gitRebaseConflictResolver(ctx, err); resolveErr != nil {
+			return fmt.Errorf("git pull --rebase conflicts: %w", resolveErr)
+		}
+		if conflict, err := rebaseConflictInProgress(ctx); err != nil {
+			return fmt.Errorf("inspect rebase conflicts after Claude: %w", err)
+		} else if conflict {
+			return fmt.Errorf("git pull --rebase conflicts remain after Claude")
+		}
+		if inProgress, err := rebaseInProgress(ctx); err != nil {
+			return fmt.Errorf("inspect rebase state after Claude: %w", err)
+		} else if inProgress {
+			return fmt.Errorf("git pull --rebase still in progress after Claude")
+		}
+	}
+	return nil
+}
+
+var gitRebaseConflictResolver = resolveRebaseConflictsWithClaude
+
+func resolveRebaseConflictsWithClaude(ctx context.Context, pullErr error) error {
+	unmerged, err := unmergedRebasePaths(ctx)
+	if err != nil {
+		return fmt.Errorf("list unmerged paths: %w", err)
+	}
+
+	prompt := fmt.Sprintf(`Git pull --rebase stopped with merge conflicts while LifeBase was preparing to push an automatic commit.
+
+Please resolve the repository's rebase conflicts and complete the rebase.
+
+Rules:
+- Inspect the conflicted files and preserve both the local LifeBase auto-commit changes and incoming upstream changes whenever possible.
+- Stage resolved files.
+- Run git rebase --continue after resolving the conflicts.
+- If Git needs an editor during rebase continuation, run GIT_EDITOR=true git rebase --continue.
+- Do not run git push.
+- If you cannot resolve safely, explain why and leave the repo in a clear state.
+
+Original git pull --rebase error:
+%s
+
+Current unmerged files:
+%s`, pullErr, formatPathList(unmerged))
+
+	if _, err := runClaudeConflictResolver(ctx, prompt); err != nil {
+		return fmt.Errorf("claude conflict resolution: %w", err)
+	}
+	return nil
+}
+
+func runClaudeConflictResolver(ctx context.Context, prompt string) (string, error) {
+	log.Printf("Running Claude Code CLI for Git rebase conflict...")
+	args := []string{"--dangerously-skip-permissions", "-p", prompt}
+	logClaudeCLICommand(args)
+
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = rootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 func commitAllChanges(ctx context.Context, message string) (repoCommitResult, error) {
@@ -109,4 +192,75 @@ func hasStagedChanges(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("git diff --cached --name-only: %w", err)
 	}
 	return strings.TrimSpace(out) != "", nil
+}
+
+func rebaseConflictInProgress(ctx context.Context) (bool, error) {
+	inProgress, err := rebaseInProgress(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !inProgress {
+		return false, nil
+	}
+	unmerged, err := unmergedRebasePaths(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(unmerged) > 0, nil
+}
+
+func rebaseInProgress(ctx context.Context) (bool, error) {
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		p, err := gitPath(ctx, name)
+		if err != nil {
+			return false, err
+		}
+		if _, err := os.Stat(p); err == nil {
+			return true, nil
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func gitPath(ctx context.Context, name string) (string, error) {
+	out, err := runGit(ctx, "rev-parse", "--git-path", name)
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --git-path %s: %w", name, err)
+	}
+	p := strings.TrimSpace(out)
+	if p == "" {
+		return "", fmt.Errorf("git path for %s is empty", name)
+	}
+	if filepath.IsAbs(p) {
+		return p, nil
+	}
+	return filepath.Join(rootDir, p), nil
+}
+
+func unmergedRebasePaths(ctx context.Context) ([]string, error) {
+	out, err := runGit(ctx, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only --diff-filter=U: %w", err)
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths, nil
+}
+
+func formatPathList(paths []string) string {
+	if len(paths) == 0 {
+		return "(none)"
+	}
+	var b strings.Builder
+	for _, p := range paths {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

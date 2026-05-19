@@ -439,7 +439,9 @@ In practice, `AGENTS.md` is the heart of personalization.
 
 ### Auto-commit and auto-push
 
-Before and after every Claude model run, LifeBase stages all changes, commits them, and runs `git push`.
+Before and after every Claude model run, LifeBase stages all changes, commits them, runs `git pull --rebase`, and then runs `git push`.
+
+If that rebase stops on merge conflicts, LifeBase asks Claude Code to resolve the conflicts and complete the rebase before pushing.
 
 That means:
 
