@@ -205,7 +205,7 @@ Once Telegram is configured and the daemon is running, you can:
 - send voice notes
 - send photos or image files
 - use slash commands like `/morning`
-- use built-ins like `/pause`, `/resume`, `/new`, `/sync`, and `/health`
+- use built-ins like `/pause`, `/resume`, `/new`, `/restart`, `/sync`, and `/health`
 
 Image behavior:
 

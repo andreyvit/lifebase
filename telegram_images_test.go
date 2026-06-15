@@ -128,6 +128,25 @@ func TestHandleTelegramCommandCancelClearsPendingTelegramImages(t *testing.T) {
 	})
 }
 
+func TestHandleTelegramCommandRestartInvokesProcessRestart(t *testing.T) {
+	oldRestartProcess := restartProcess
+	restarted := false
+	restartProcess = func() {
+		restarted = true
+	}
+	t.Cleanup(func() {
+		restartProcess = oldRestartProcess
+	})
+
+	now := time.Date(2026, time.April, 10, 12, 30, 0, 0, time.Local)
+	if !handleTelegramCommand(context.Background(), "/restart", now, 123) {
+		t.Fatalf("handleTelegramCommand did not handle /restart")
+	}
+	if !restarted {
+		t.Fatal("restartProcess was not called")
+	}
+}
+
 func TestRunTelegramActivityIndicatorRepeatsUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
