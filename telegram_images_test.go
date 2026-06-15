@@ -129,6 +129,9 @@ func TestHandleTelegramCommandCancelClearsPendingTelegramImages(t *testing.T) {
 }
 
 func TestHandleTelegramCommandRestartInvokesProcessRestart(t *testing.T) {
+	setupTempStateForTest(t)
+	initState()
+
 	oldRestartProcess := restartProcess
 	restarted := false
 	restartProcess = func() {
@@ -145,6 +148,11 @@ func TestHandleTelegramCommandRestartInvokesProcessRestart(t *testing.T) {
 	if !restarted {
 		t.Fatal("restartProcess was not called")
 	}
+	ReadState(func(st *State) {
+		if !st.IsRestartingMyself {
+			t.Fatal("IsRestartingMyself = false, want true")
+		}
+	})
 }
 
 func TestRunTelegramActivityIndicatorRepeatsUntilCanceled(t *testing.T) {

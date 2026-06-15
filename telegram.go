@@ -37,10 +37,6 @@ func sendTelegramText(ctx context.Context, text string) error {
 	return sendTelegramTextTagged(ctx, "ai", text)
 }
 
-var restartProcess = func() {
-	os.Exit(0)
-}
-
 func sendTelegramTextTagged(ctx context.Context, outputTag, text string) error {
 	if err := sendTelegramTextRaw(ctx, text); err != nil {
 		return err
@@ -430,7 +426,7 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 			return true
 		}
 		_ = sendTelegramText(ctx, "Restarting.")
-		restartProcess()
+		requestSelfRestart()
 		return true
 	case "sync":
 		commitMsg := strings.TrimSpace(rest)

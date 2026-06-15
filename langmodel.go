@@ -21,7 +21,7 @@ func runProactiveModel(ctx context.Context, prompt string, historySuffix string,
 	return runModel(ctx, prompt, historySuffix, extraContext)
 }
 
-func runModel(ctx context.Context, prompt string, historySuffix string, extraContext string) (string, error) {
+func runModel(ctx context.Context, prompt string, historySuffix string, extraContext string) (result string, err error) {
 	// Serialize all model invocations globally.
 	modelMu.Lock()
 	defer modelMu.Unlock()
@@ -29,9 +29,66 @@ func runModel(ctx context.Context, prompt string, historySuffix string, extraCon
 	maybeRunHealthDayChangeProcessing(ctx, time.Now().Local())
 
 	bestEffortCommitAndPushAllChanges(ctx, "changes before running model")
-	defer bestEffortCommitAndPushAllChanges(ctx, "changes")
+	restartAfterReturn := false
+	defer func() {
+		bestEffortCommitAndPushAllChanges(ctx, "changes")
+		if restartAfterReturn {
+			requestSelfRestart()
+		}
+	}()
 
-	return runClaudeCLI(ctx, prompt, historySuffix, extraContext)
+	out, err := runClaudeCLI(ctx, prompt, historySuffix, extraContext)
+	if err != nil {
+		return "", err
+	}
+	out, action, err := handleAgentControlOutput(func(correctionPrompt string) (string, error) {
+		return runClaudeCLI(ctx, correctionPrompt, historySuffix, "")
+	}, out)
+	if err != nil {
+		return "", err
+	}
+	if action == agentControlRestart {
+		restartAfterReturn = true
+		return "", nil
+	}
+	return out, nil
+}
+
+type agentControlAction int
+
+const (
+	agentControlNone agentControlAction = iota
+	agentControlRestart
+)
+
+func handleAgentControlOutput(rerun func(prompt string) (string, error), out string) (string, agentControlAction, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		if strings.TrimSpace(out) == lifebaseRestartDirective {
+			return "", agentControlRestart, nil
+		}
+		if !strings.Contains(out, lifebaseRestartDirective) {
+			return out, agentControlNone, nil
+		}
+		if rerun == nil {
+			return "", agentControlNone, fmt.Errorf("agent response contains %s but cannot be corrected", lifebaseRestartDirective)
+		}
+
+		next, err := rerun(restartDirectiveCorrectionPrompt())
+		if err != nil {
+			return "", agentControlNone, fmt.Errorf("agent restart directive correction: %w", err)
+		}
+		out = next
+	}
+	return "", agentControlNone, fmt.Errorf("agent response still contains %s after correction attempts", lifebaseRestartDirective)
+}
+
+func restartDirectiveCorrectionPrompt() string {
+	return fmt.Sprintf(`Your previous response was rejected because it contained %s but was not exactly that directive after trimming whitespace.
+
+If you want LifeBase to restart, reply with exactly:
+%s
+
+If you do not want LifeBase to restart, reply with a normal user-facing message that does not contain %s.`, lifebaseRestartDirective, lifebaseRestartDirective, lifebaseRestartDirective)
 }
 
 type claudeCLIInvocation struct {

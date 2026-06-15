@@ -29,6 +29,9 @@ type State struct {
 	LastIncomingAt time.Time `json:"last_incoming_at,omitzero"`
 	// ClaudeSession is the active Claude Code session for automation runs; it is rotated daily.
 	ClaudeSession SessionState `json:"claude_session,omitzero"`
+	// IsRestartingMyself is set just before LifeBase exits intentionally so the
+	// next launch can notify the active agent session that restart completed.
+	IsRestartingMyself bool `json:"is_restarting_myself,omitempty"`
 
 	// HealthDailyLastProcessedDay tracks the last local day (YYYY-MM-DD) when
 	// end-of-day health snapshot processing ran.

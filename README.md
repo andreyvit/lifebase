@@ -459,6 +459,10 @@ From Telegram, `/sync` commits any local changes, runs `git pull --rebase` even 
 
 If Git is not configured correctly, ingestion can still edit files, but the commit / push step will fail.
 
+Telegram `/restart` saves a restart flag and exits the process. On the next launch, LifeBase clears that flag and sends `<lifebase:restart-done />` to the active Claude session.
+
+Claude can request the same restart by replying with exactly `<<<LIFEBASE:RESTART>>>` after trimming whitespace. If that token appears alongside any other text, LifeBase rejects the response and asks Claude to send a corrected reply.
+
 ## Prompt Commands and Scheduled Check-Ins
 
 LifeBase treats prompt files as named commands.

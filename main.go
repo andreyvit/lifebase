@@ -92,6 +92,9 @@ func main() {
 
 	initState()
 	maybeRunHealthDayChangeProcessing(context.Background(), time.Now().Local())
+	if err := completePendingSelfRestart(context.Background()); err != nil {
+		log.Printf("Restart completion failed: %v", err)
+	}
 
 	if addFn != "" {
 		err := add(context.Background(), addFn)
@@ -184,9 +187,7 @@ func runIngestText(ctx context.Context, imagePaths []string, textTag, text strin
 	if err != nil {
 		return fmt.Errorf("ingestion: %v", err)
 	}
-	claudeOut = strings.TrimSpace(claudeOut)
-	claudeOut = strings.TrimPrefix(claudeOut, "---")
-	claudeOut = strings.TrimSpace(claudeOut)
+	claudeOut = normalizeAgentUserMessage(claudeOut)
 
 	if claudeOut == "" {
 		log.Printf("Claude produced empty output, nothing to send")
