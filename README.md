@@ -205,7 +205,7 @@ Once Telegram is configured and the daemon is running, you can:
 - send voice notes
 - send photos or image files
 - use slash commands like `/morning`
-- use built-ins like `/pause`, `/resume`, `/new`, `/commit`, and `/health`
+- use built-ins like `/pause`, `/resume`, `/new`, `/sync`, and `/health`
 
 Image behavior:
 
@@ -449,11 +449,13 @@ That means:
 - your current branch should have a working upstream
 - you should be comfortable with automatic commits
 
-There is also a manual:
+There is also a manual CLI command:
 
 ```bash
 lifebase -commit
 ```
+
+From Telegram, `/sync` commits any local changes, runs `git pull --rebase` even when there is nothing to commit, resolves rebase conflicts through Claude Code when needed, and pushes.
 
 If Git is not configured correctly, ingestion can still edit files, but the commit / push step will fail.
 

@@ -420,24 +420,28 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		UpdateState(func(st *State) { st.ResetSession() })
 		_ = sendTelegramText(ctx, "OK. Next run will start a new session.")
 		return true
-	case "commit":
+	case "sync":
 		commitMsg := strings.TrimSpace(rest)
 		if commitMsg == "" {
 			commitMsg = "changes"
 		}
-		res, err := commitAndPushAllChanges(ctx, commitMsg)
+		res, err := syncAllChanges(ctx, commitMsg)
 		if err != nil {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Commit failed: %v", err))
+			_ = sendTelegramText(ctx, fmt.Sprintf("Sync failed: %v", err))
 			return true
 		}
-		if !res.DidCommit {
-			_ = sendTelegramText(ctx, "No changes to commit.")
+		if res.DidCommit {
+			if res.CommitSHA != "" {
+				_ = sendTelegramText(ctx, fmt.Sprintf("Synced: committed, pulled/rebased, and pushed: %s", res.CommitSHA))
+			} else {
+				_ = sendTelegramText(ctx, "Synced: committed, pulled/rebased, and pushed.")
+			}
 			return true
 		}
 		if res.CommitSHA != "" {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Committed and pushed: %s", res.CommitSHA))
+			_ = sendTelegramText(ctx, fmt.Sprintf("Synced: pulled/rebased and pushed. No local changes committed. HEAD: %s", res.CommitSHA))
 		} else {
-			_ = sendTelegramText(ctx, "Committed and pushed.")
+			_ = sendTelegramText(ctx, "Synced: pulled/rebased and pushed. No local changes committed.")
 		}
 		return true
 	case "cancel":
@@ -585,9 +589,9 @@ func updateTelegramCommands(ctx context.Context) error {
 		seen["new"] = true
 		cmds = append(cmds, tgBotCommand{Command: "new", Description: "Reset session"})
 	}
-	if !seen["commit"] {
-		seen["commit"] = true
-		cmds = append(cmds, tgBotCommand{Command: "commit", Description: "Commit and push all changes"})
+	if !seen["sync"] {
+		seen["sync"] = true
+		cmds = append(cmds, tgBotCommand{Command: "sync", Description: "Commit changes, pull/rebase, and push"})
 	}
 	if paused {
 		if !seen["resume"] {

@@ -90,6 +90,51 @@ func TestCommitAndPushPullRebaseInvokesResolverForConflicts(t *testing.T) {
 	}
 }
 
+func TestSyncAllChangesPullsWhenNoLocalChanges(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	local := filepath.Join(root, "local")
+	peer := filepath.Join(root, "peer")
+
+	runTestCommand(t, "", "git", "init", "--bare", remote)
+	runTestCommand(t, "", "git", "clone", remote, local)
+	configureTestGitUser(t, local)
+	runTestCommand(t, local, "git", "checkout", "-b", "main")
+	writeTestFile(t, filepath.Join(local, "note.md"), "base\n")
+	runTestCommand(t, local, "git", "add", ".")
+	runTestCommand(t, local, "git", "commit", "-m", "initial")
+	runTestCommand(t, local, "git", "push", "-u", "origin", "main")
+	runTestCommand(t, remote, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+
+	runTestCommand(t, "", "git", "clone", remote, peer)
+	configureTestGitUser(t, peer)
+	writeTestFile(t, filepath.Join(peer, "note.md"), "base\nremote\n")
+	runTestCommand(t, peer, "git", "commit", "-am", "remote")
+	remoteHead := runTestCommand(t, peer, "git", "rev-parse", "HEAD")
+	runTestCommand(t, peer, "git", "push")
+
+	oldRootDir := rootDir
+	rootDir = local
+	t.Cleanup(func() {
+		rootDir = oldRootDir
+	})
+
+	res, err := syncAllChanges(ctx, "changes")
+	if err != nil {
+		t.Fatalf("syncAllChanges: %v", err)
+	}
+	if res.DidCommit {
+		t.Fatal("DidCommit = true, want false")
+	}
+	if res.CommitSHA != remoteHead {
+		t.Fatalf("CommitSHA = %s, want remote HEAD %s", res.CommitSHA, remoteHead)
+	}
+	if got := readTestFile(t, filepath.Join(local, "note.md")); got != "base\nremote\n" {
+		t.Fatalf("local note.md = %q, want pulled remote contents", got)
+	}
+}
+
 func configureTestGitUser(t *testing.T, dir string) {
 	t.Helper()
 	runTestCommand(t, dir, "git", "config", "user.name", "LifeBase Test")

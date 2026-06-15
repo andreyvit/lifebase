@@ -24,6 +24,18 @@ func commitAndPushAllChanges(ctx context.Context, message string) (repoCommitRes
 	if !res.DidCommit {
 		return res, nil
 	}
+	return pullRebaseAndPush(ctx, res)
+}
+
+func syncAllChanges(ctx context.Context, message string) (repoCommitResult, error) {
+	res, err := commitAllChanges(ctx, message)
+	if err != nil {
+		return repoCommitResult{}, err
+	}
+	return pullRebaseAndPush(ctx, res)
+}
+
+func pullRebaseAndPush(ctx context.Context, res repoCommitResult) (repoCommitResult, error) {
 	if err := pullRebaseBeforePush(ctx); err != nil {
 		return repoCommitResult{}, err
 	}
