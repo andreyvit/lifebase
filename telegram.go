@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,26 @@ import (
 	"strings"
 	"time"
 )
+
+// sharedHTTPTransport caps idle-connection age below typical NAT timeouts so
+// stale TCP connections don't cause silent hangs. All Telegram HTTP calls go
+// through clients built on this transport.
+var sharedHTTPTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          16,
+	IdleConnTimeout:       30 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+}
+
+func newHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Transport: sharedHTTPTransport, Timeout: timeout}
+}
 
 func logPromptOutputTag(fileBasename string) string {
 	fileBasename = strings.TrimSpace(fileBasename)
@@ -89,7 +110,7 @@ func telegramSendMessage(ctx context.Context, botToken, chatID, text string) err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	cli := &http.Client{Timeout: 2 * time.Minute}
+	cli := newHTTPClient(2 * time.Minute)
 	res, err := cli.Do(req)
 	if err != nil {
 		return err
@@ -101,12 +122,22 @@ func telegramSendMessage(ctx context.Context, botToken, chatID, text string) err
 		if len(msg) > 500 {
 			msg = msg[:500] + "…"
 		}
-		return fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+		err := fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
+			return permanent(err)
+		}
+		return err
 	}
 	return nil
 }
 
 func telegramSendChatAction(ctx context.Context, botToken, chatID, action string) error {
+	return retryCtx(ctx, func() error {
+		return telegramSendChatActionOnce(ctx, botToken, chatID, action)
+	})
+}
+
+func telegramSendChatActionOnce(ctx context.Context, botToken, chatID, action string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendChatAction", botToken)
 	payload := map[string]any{
 		"chat_id": chatID,
@@ -120,7 +151,7 @@ func telegramSendChatAction(ctx context.Context, botToken, chatID, action string
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	cli := &http.Client{Timeout: 30 * time.Second}
+	cli := newHTTPClient(30 * time.Second)
 	res, err := cli.Do(req)
 	if err != nil {
 		return err
@@ -132,7 +163,11 @@ func telegramSendChatAction(ctx context.Context, botToken, chatID, action string
 		if len(msg) > 500 {
 			msg = msg[:500] + "…"
 		}
-		return fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+		err := fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
+			return permanent(err)
+		}
+		return err
 	}
 	return nil
 }
@@ -161,7 +196,7 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 	}
 
 	base := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", secrets.TelegramBotToken)
-	cli := &http.Client{Timeout: 70 * time.Second}
+	cli := newHTTPClient(70 * time.Second)
 	var offset int64 = 0
 	mediaGroups := map[string]*pendingTelegramMediaGroup{}
 	log.Printf("Polling Telegram updates…")
@@ -645,6 +680,12 @@ func telegramSetMyCommands(ctx context.Context, botToken string, commands []tgBo
 	if strings.TrimSpace(botToken) == "" {
 		return fmt.Errorf("telegram not configured")
 	}
+	return retryCtx(ctx, func() error {
+		return telegramSetMyCommandsOnce(ctx, botToken, commands)
+	})
+}
+
+func telegramSetMyCommandsOnce(ctx context.Context, botToken string, commands []tgBotCommand) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", botToken)
 	payload := map[string]any{
 		"commands": commands,
@@ -657,7 +698,7 @@ func telegramSetMyCommands(ctx context.Context, botToken string, commands []tgBo
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	cli := &http.Client{Timeout: 30 * time.Second}
+	cli := newHTTPClient(30 * time.Second)
 	res, err := cli.Do(req)
 	if err != nil {
 		return err
@@ -674,7 +715,11 @@ func telegramSetMyCommands(ctx context.Context, botToken string, commands []tgBo
 		if resp.Description == "" {
 			resp.Description = fmt.Sprintf("HTTP %d", res.StatusCode)
 		}
-		return fmt.Errorf("setMyCommands failed: %s", resp.Description)
+		err := fmt.Errorf("setMyCommands failed: %s", resp.Description)
+		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
+			return permanent(err)
+		}
+		return err
 	}
 	return nil
 }
@@ -986,12 +1031,22 @@ func telegramImageExt(filePath, fallbackName, mimeType string) string {
 }
 
 func telegramGetFilePath(ctx context.Context, token, fileID string) (string, error) {
+	var out string
+	err := retryCtx(ctx, func() error {
+		var rerr error
+		out, rerr = telegramGetFilePathOnce(ctx, token, fileID)
+		return rerr
+	})
+	return out, err
+}
+
+func telegramGetFilePathOnce(ctx context.Context, token, fileID string) (string, error) {
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/getFile?file_id=%s", token, url.QueryEscape(fileID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
-	cli := &http.Client{Timeout: 30 * time.Second}
+	cli := newHTTPClient(30 * time.Second)
 	res, err := cli.Do(req)
 	if err != nil {
 		return "", err
@@ -1006,22 +1061,33 @@ func telegramGetFilePath(ctx context.Context, token, fileID string) (string, err
 		if desc == "" {
 			desc = "unknown error"
 		}
-		// Telegram Bot API has a 20 MB file size limit
+		// Telegram Bot API has a 20 MB file size limit — permanent error.
 		if strings.Contains(strings.ToLower(desc), "file is too big") {
-			return "", fmt.Errorf("%s (Telegram Bot API limit is 20 MB; use -add with a local file for large recordings)", desc)
+			return "", permanent(fmt.Errorf("%s (Telegram Bot API limit is 20 MB; use -add with a local file for large recordings)", desc))
 		}
-		return "", fmt.Errorf("getFile failed: %s", desc)
+		err := fmt.Errorf("getFile failed: %s", desc)
+		// 4xx description usually means a bad file_id or revoked file — don't retry.
+		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
+			return "", permanent(err)
+		}
+		return "", err
 	}
 	return resp.Result.FilePath, nil
 }
 
 func telegramDownloadToPath(ctx context.Context, token, filePath, destPath string) error {
+	return retryCtx(ctx, func() error {
+		return telegramDownloadToPathOnce(ctx, token, filePath, destPath)
+	})
+}
+
+func telegramDownloadToPathOnce(ctx context.Context, token, filePath, destPath string) error {
 	u := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", token, filePath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
-	cli := &http.Client{Timeout: 5 * time.Minute}
+	cli := newHTTPClient(5 * time.Minute)
 	res, err := cli.Do(req)
 	if err != nil {
 		return err
@@ -1029,14 +1095,18 @@ func telegramDownloadToPath(ctx context.Context, token, filePath, destPath strin
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		b, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("download HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+		err := fmt.Errorf("download HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(b)))
+		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
+			return permanent(err)
+		}
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o777); err != nil {
-		return err
+		return permanent(err)
 	}
 	f, err := os.Create(destPath)
 	if err != nil {
-		return err
+		return permanent(err)
 	}
 	if _, err := io.Copy(f, res.Body); err != nil {
 		_ = f.Close()
@@ -1045,7 +1115,7 @@ func telegramDownloadToPath(ctx context.Context, token, filePath, destPath strin
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(destPath)
-		return err
+		return permanent(err)
 	}
 	return nil
 }
