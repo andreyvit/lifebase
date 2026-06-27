@@ -18,6 +18,11 @@ type Config struct {
 
 	AppleHealthExportDir string `json:"apple_health_export_dir"`
 
+	// Language is the ISO-639-1 code passed to speech-to-text for transcription
+	// (e.g. "en", "ru"). Empty means auto-detect, which lets the recognizer
+	// accept any language (e.g. mixed Russian/English).
+	Language string `json:"language"`
+
 	SecretsFile string `json:"secrets_file"`
 
 	// HealthFile is the path (relative to the lifebase.yaml directory) where health metrics are
@@ -46,6 +51,7 @@ func DefaultConfig() Config {
 		PromptsDir:                           "Prompts",
 		StateFile:                            "lifebase-state.json",
 		SecretsFile:                          "lifebase-secrets.yaml",
+		Language:                             "en",
 		HealthFile:                           "Generated/health.md",
 		ProactiveHistoryFile:                 "Generated/proactive-history.md",
 		DayBoundaryHour:                      5,

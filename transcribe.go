@@ -43,7 +43,11 @@ func transcribe(ctx context.Context, fn string) (string, error) {
 		"response_format":   "text",
 		"temperature":       "0",
 		"chunking_strategy": "auto",
-		"language":          "en",
+	}
+	// Pass a language hint when configured; empty means auto-detect (accepts any
+	// language, e.g. mixed Russian/English).
+	if lang := strings.TrimSpace(config.Language); lang != "" {
+		fields["language"] = lang
 	}
 	dur, derr := probeAudioDurationSeconds(ctx, prepFn)
 	if derr != nil {
