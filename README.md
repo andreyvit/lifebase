@@ -166,7 +166,7 @@ lifebase -add /path/to/note.txt
 
 What happens:
 
-1. Audio is transcribed with OpenAI `gpt-4o-transcribe`.
+1. Audio is transcribed with OpenAI `gpt-transcribe`.
 2. If the format is unsupported, LifeBase converts it with `ffmpeg`.
 3. Long audio is chunked automatically before upload.
 4. The resulting text is sent to Claude Code with `Prompts/system-ingest.md`.

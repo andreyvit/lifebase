@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -39,15 +40,13 @@ func transcribe(ctx context.Context, fn string) (string, error) {
 	}
 
 	fields := map[string]string{
-		"model":             "gpt-4o-transcribe",
-		"response_format":   "text",
-		"temperature":       "0",
-		"chunking_strategy": "auto",
+		"model":           "gpt-transcribe",
+		"response_format": "json",
 	}
 	// Pass a language hint when configured; empty means auto-detect (accepts any
 	// language, e.g. mixed Russian/English).
 	if lang := strings.TrimSpace(config.Language); lang != "" {
-		fields["language"] = lang
+		fields["languages[]"] = lang
 	}
 	dur, derr := probeAudioDurationSeconds(ctx, prepFn)
 	if derr != nil {
@@ -76,14 +75,18 @@ func transcribe(ctx context.Context, fn string) (string, error) {
 		} else {
 			log.Printf("OpenAI...")
 		}
-		var segText string
+		var respBody string
 		err = retry(func() error {
 			fh := must(os.Open(seg))
 			defer fh.Close()
 			var e error
-			segText, e = postMultipart(ctx, "https://api.openai.com/v1/audio/transcriptions", secrets.OpenAIKey, fields, "file", filepath.Base(seg), fh)
+			respBody, e = postMultipart(ctx, "https://api.openai.com/v1/audio/transcriptions", secrets.OpenAIKey, fields, "file", filepath.Base(seg), fh)
 			return e
 		})
+		if err != nil {
+			return "", fmt.Errorf("segment %d: %w", i+1, err)
+		}
+		segText, err := parseTranscriptionResponse(respBody)
 		if err != nil {
 			return "", fmt.Errorf("segment %d: %w", i+1, err)
 		}
@@ -96,6 +99,19 @@ func transcribe(ctx context.Context, fn string) (string, error) {
 		}
 	}
 	return out.String(), nil
+}
+
+func parseTranscriptionResponse(body string) (string, error) {
+	var resp struct {
+		Text *string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return "", fmt.Errorf("decode transcription response: %w", err)
+	}
+	if resp.Text == nil {
+		return "", fmt.Errorf("decode transcription response: missing text")
+	}
+	return *resp.Text, nil
 }
 
 // prepareAudioForTranscription converts unsupported formats (e.g. .oga/.ogg/.opus)
