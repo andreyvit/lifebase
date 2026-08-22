@@ -11,4 +11,7 @@ func TestDefaultConfigIncludesStateAndSecretsFiles(t *testing.T) {
 	if cfg.SecretsFile != "lifebase-secrets.yaml" {
 		t.Fatalf("SecretsFile = %q, want lifebase-secrets.yaml", cfg.SecretsFile)
 	}
+	if cfg.Agent != "claude" {
+		t.Fatalf("Agent = %q, want claude", cfg.Agent)
+	}
 }

@@ -10,7 +10,7 @@ In practice, a LifeBase usually grows into:
 - daily and diary writing
 - specialized logs for repetitive low-drama data like meals, symptoms, sex, or health snapshots
 - prompt files that turn your repo into a persistent coaching / accountability / reflection system
-- a continuity layer for Claude Code, so the AI can read your life context, not just your latest message
+- a continuity layer for Claude Code, Grok, or Codex, so the AI can read your life context, not just your latest message
 
 If you already keep notes, planning docs, therapy notes, journals, or life admin in scattered places, LifeBase is a way to make them coherent and operational.
 
@@ -38,7 +38,7 @@ It is especially useful if you want AI to help with:
 LifeBase itself is a single Go binary, but it depends on a few other tools:
 
 - Go 1.24.5 or newer, to install `lifebase`
-- [Claude Code](https://code.claude.com/docs/en/quickstart), because LifeBase uses the local `claude` CLI for all reasoning
+- a coding-agent CLI for reasoning, selected with `agent` in `lifebase.yaml`: [Claude Code](https://code.claude.com/docs/en/quickstart) (`claude`, default), [Grok](https://x.ai/cli/install.sh) (`grok`), or [Codex](https://github.com/openai/codex) (`codex`)
 - `ffmpeg` and `ffprobe`, because audio ingestion and format conversion depend on them
 - an OpenAI API key, because audio transcription uses OpenAI's speech-to-text API
 
@@ -73,6 +73,27 @@ claude
 ```
 
 Anthropic currently supports logging in with a Claude subscription account such as Pro / Max / Teams / Enterprise, or with a Claude Console account. For LifeBase, a normal Claude subscription is the easiest path.
+
+### Install Grok
+
+If you set `agent: grok`, install the Grok CLI and log in:
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok
+```
+
+LifeBase runs Grok in headless always-approve mode (`grok -p --always-approve`) and resumes a persistent session across messages.
+
+### Install Codex
+
+If you set `agent: codex`, install the Codex CLI and log in. See the [Codex CLI docs](https://github.com/openai/codex). Then start it once:
+
+```bash
+codex
+```
+
+LifeBase runs Codex with `codex exec --dangerously-bypass-approvals-and-sandbox` and resumes the same thread across messages.
 
 ### Install ffmpeg
 
@@ -133,12 +154,12 @@ Create a secret API key here:
 - [OpenAI API key page](https://platform.openai.com/api-keys)
 - [OpenAI help article](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key?no_head=1)
 
-That key is only for transcription. Claude reasoning does not use OpenAI.
+That key is only for transcription. Agent reasoning uses the selected CLI (`claude`, `grok`, or `codex`), not this OpenAI key.
 
 
-### Claude authentication
+### Agent authentication
 
-Claude auth is handled by the `claude` CLI itself, not by `lifebase-secrets.yaml`.
+Claude, Grok, and Codex authentication are handled by those CLIs themselves, not by `lifebase-secrets.yaml`.
 
 
 ## Feed Notes Into LifeBase
@@ -169,8 +190,8 @@ What happens:
 1. Audio is transcribed with OpenAI `gpt-transcribe`.
 2. If the format is unsupported, LifeBase converts it with `ffmpeg`.
 3. Long audio is chunked automatically before upload.
-4. The resulting text is sent to Claude Code with `Prompts/system-ingest.md`.
-5. Claude updates your repo according to `AGENTS.md`.
+4. The resulting text is sent to the configured agent with `Prompts/system-ingest.md`.
+5. The agent updates your repo according to `AGENTS.md`.
 6. The final reply is sent to Telegram.
 
 Important: `-add` still expects Telegram to be configured, because replies are delivered there rather than printed to stdout.
@@ -377,6 +398,31 @@ deno cache /ABSOLUTE/PATH/TO/YOUR/REPO/.claude/bin/fastmail_mcp_http.ts
 After that, `claude mcp list` should show the Fastmail server as connected, and one-shot `claude -p` runs should see Fastmail tools immediately.
 
 
+### MCP for Grok and Codex
+
+The same warm HTTP daemons work for Grok and Codex. Only the client config file changes.
+
+Grok project MCP lives in `.grok/config.toml`. Codex project MCP lives in `.codex/config.toml`. Grok can also load a project `.mcp.json` for compatibility with Claude.
+
+Examples:
+
+- [`example/.grok/config.toml`](example/.grok/config.toml)
+- [`example/.codex/config.toml`](example/.codex/config.toml)
+
+Typical flow:
+
+1. Keep the Telegram and Fastmail LaunchAgents from the Claude sections above.
+2. Copy the example Grok or Codex config into your content repo.
+3. Confirm the agent sees the servers:
+
+```sh
+grok mcp list
+codex mcp list
+```
+
+Daemon secrets stay in `.claude/settings.local.json`. The Grok and Codex configs only need the HTTP URLs.
+
+
 ### Watched audio recorder folder
 
 If you set `audio_recorder_dir`, running plain `lifebase` starts a daemon that polls that folder every 5 seconds and ingests new `.m4a` files.
@@ -402,21 +448,21 @@ This is meant for iPhone / Mac audio recorder workflows where recordings land in
 
 LifeBase is intentionally simple, but there are a few important moving parts.
 
-### A persistent Claude Code session
+### A persistent agent session
 
-LifeBase keeps a persistent Claude Code session in `state_file` and reuses it across messages.
+LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. The CLI is selected with `agent` in `lifebase.yaml` (`claude`, `grok`, or `codex`). Claude, Grok, and Codex each have their own session, so switching `agent` during the day resumes that CLI's existing thread instead of starting over.
 
-That session is rotated daily:
+Each session is rotated daily, and a new day expires every agent's session (not only the one you are using):
 
 - the boundary is controlled by `day_boundary_hour` (default: `5`)
-- if you interacted recently, the session can survive past the boundary by `agent_session_extend_if_interacted_within` (default: `1h`)
-- you can force a reset from Telegram with `/new`
+- if you interacted recently, that agent's session can survive past the boundary by `agent_session_extend_if_interacted_within` (default: `1h`)
+- Telegram `/new` clears all agent sessions so the next run is a fresh start
 
 ### Startup prompt
 
-Whenever a new Claude session starts, LifeBase runs `Prompts/init.md` first.
+Whenever a new agent session starts, LifeBase runs `Prompts/init.md` first.
 
-That prompt is where you define what Claude should load at session start: usually your core files, recent Diary and Daily notes, therapy notes, AI notes, and optionally generated health context.
+That prompt is where you define what the agent should load at session start: usually your core files, recent Diary and Daily notes, therapy notes, AI notes, and optionally generated health context.
 
 ### Ingestion prompt and AGENTS instructions
 
@@ -439,9 +485,9 @@ In practice, `AGENTS.md` is the heart of personalization.
 
 ### Auto-commit and auto-push
 
-Before and after every Claude model run, LifeBase stages all changes, commits them, runs `git pull --rebase`, and then runs `git push`.
+Before and after every agent model run, LifeBase stages all changes, commits them, runs `git pull --rebase`, and then runs `git push`.
 
-If that rebase stops on merge conflicts, LifeBase asks Claude Code to resolve the conflicts and complete the rebase before pushing.
+If that rebase stops on merge conflicts, LifeBase asks the configured agent to resolve the conflicts and complete the rebase before pushing.
 
 That means:
 
@@ -455,13 +501,13 @@ There is also a manual CLI command:
 lifebase -commit
 ```
 
-From Telegram, `/sync` commits any local changes, runs `git pull --rebase` even when there is nothing to commit, resolves rebase conflicts through Claude Code when needed, and pushes.
+From Telegram, `/sync` commits any local changes, runs `git pull --rebase` even when there is nothing to commit, resolves rebase conflicts through the configured agent when needed, and pushes.
 
 If Git is not configured correctly, ingestion can still edit files, but the commit / push step will fail.
 
-Telegram `/restart` saves a restart flag and exits the process. On the next launch, LifeBase clears that flag and sends `<lifebase:restart-done />` to the active Claude session.
+Telegram `/restart` saves a restart flag and exits the process. On the next launch, LifeBase clears that flag and sends `<lifebase:restart-done />` to the active agent session.
 
-Claude can request the same restart by replying with exactly `<<<LIFEBASE:RESTART>>>` after trimming whitespace. If that token appears alongside any other text, LifeBase rejects the response and asks Claude to send a corrected reply.
+The agent can request the same restart by replying with exactly `<<<LIFEBASE:RESTART>>>` after trimming whitespace. If that token appears alongside any other text, LifeBase rejects the response and asks the agent to send a corrected reply.
 
 ## Prompt Commands and Scheduled Check-Ins
 
@@ -551,7 +597,7 @@ If that exact path differs on your machine, just find the directory that actuall
 
 If `apple_health_export_dir` is configured:
 
-- before a new Claude session starts, LifeBase writes current health context to `health_file`
+- before a new agent session starts, LifeBase writes current health context to `health_file`
 - `health_file` defaults to `Generated/health.md`
 - `lifebase -health48` prints a recent 48-hour summary for debugging
 
@@ -567,15 +613,16 @@ All paths are resolved relative to the directory containing `lifebase.yaml`, unl
 | --- | --- | --- |
 | `raw_inputs_dir` | `Raw` | Where raw transcriptions and reused input notes live. |
 | `prompts_dir` | `Prompts` | Directory containing prompt files. |
-| `state_file` | `lifebase-state.json` | Persistent daemon state: seen files, prompt runs, Claude session, pending log input, etc. |
+| `agent` | `claude` | Coding-agent CLI used for reasoning: `claude`, `grok`, or `codex`. |
+| `state_file` | `lifebase-state.json` | Persistent daemon state: seen files, prompt runs, agent session, pending log input, etc. |
 | `secrets_file` | `lifebase-secrets.yaml` | YAML file containing the OpenAI and Telegram secrets. |
 | `audio_recorder_dir` | empty | Optional watched folder for `.m4a` recordings. |
 | `apple_health_export_dir` | empty | Optional folder containing `HealthAutoExport-YYYY-MM-DD.json` files. |
-| `health_file` | `Generated/health.md` | Auto-written health context file used on new Claude sessions. |
+| `health_file` | `Generated/health.md` | Auto-written health context file used on new agent sessions. |
 | `proactive_history_file` | `Generated/proactive-history.md` | Rolling log of proactive outputs so prompts can avoid repetition. |
 | `write_history` | `false` | If true, write raw prompt / assistant transcripts into `.history/` for debugging. |
 | `day_boundary_hour` | `5` | Local hour treated as the LifeBase day boundary. |
-| `agent_session_extend_if_interacted_within` | `1h` | Keep the Claude session alive across the day boundary if there was recent interaction. |
+| `agent_session_extend_if_interacted_within` | `1h` | Keep the agent session alive across the day boundary if there was recent interaction. |
 
 ### `write_history`
 
@@ -609,8 +656,8 @@ Once you have:
 - rewritten `AGENTS.md`
 - replaced the fictional starter content
 - filled in `lifebase-secrets.yaml`
-- installed Claude Code
-- logged in with `claude`
+- installed the chosen agent CLI (`claude`, `grok`, or `codex`)
+- logged in with that CLI
 - installed `ffmpeg`
 - configured Git remote / upstream
 

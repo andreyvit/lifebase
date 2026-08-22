@@ -63,23 +63,24 @@ func pullRebaseBeforePush(ctx context.Context) error {
 		if resolveErr := gitRebaseConflictResolver(ctx, err); resolveErr != nil {
 			return fmt.Errorf("git pull --rebase conflicts: %w", resolveErr)
 		}
+		agentName := configuredAgent().DisplayName
 		if conflict, err := rebaseConflictInProgress(ctx); err != nil {
-			return fmt.Errorf("inspect rebase conflicts after Claude: %w", err)
+			return fmt.Errorf("inspect rebase conflicts after %s: %w", agentName, err)
 		} else if conflict {
-			return fmt.Errorf("git pull --rebase conflicts remain after Claude")
+			return fmt.Errorf("git pull --rebase conflicts remain after %s", agentName)
 		}
 		if inProgress, err := rebaseInProgress(ctx); err != nil {
-			return fmt.Errorf("inspect rebase state after Claude: %w", err)
+			return fmt.Errorf("inspect rebase state after %s: %w", agentName, err)
 		} else if inProgress {
-			return fmt.Errorf("git pull --rebase still in progress after Claude")
+			return fmt.Errorf("git pull --rebase still in progress after %s", agentName)
 		}
 	}
 	return nil
 }
 
-var gitRebaseConflictResolver = resolveRebaseConflictsWithClaude
+var gitRebaseConflictResolver = resolveRebaseConflictsWithAgent
 
-func resolveRebaseConflictsWithClaude(ctx context.Context, pullErr error) error {
+func resolveRebaseConflictsWithAgent(ctx context.Context, pullErr error) error {
 	unmerged, err := unmergedRebasePaths(ctx)
 	if err != nil {
 		return fmt.Errorf("list unmerged paths: %w", err)
@@ -103,24 +104,19 @@ Original git pull --rebase error:
 Current unmerged files:
 %s`, pullErr, formatPathList(unmerged))
 
-	if _, err := runClaudeConflictResolver(ctx, prompt); err != nil {
-		return fmt.Errorf("claude conflict resolution: %w", err)
+	spec := configuredAgent()
+	if _, err := runAgentConflictResolver(ctx, prompt); err != nil {
+		return fmt.Errorf("%s conflict resolution: %w", spec.Bin, err)
 	}
 	return nil
 }
 
-func runClaudeConflictResolver(ctx context.Context, prompt string) (string, error) {
-	log.Printf("Running Claude Code CLI for Git rebase conflict...")
-	args := []string{"--dangerously-skip-permissions", "-p", prompt}
-	logClaudeCLICommand(args)
-
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = rootDir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
+func runAgentConflictResolver(ctx context.Context, prompt string) (string, error) {
+	spec := configuredAgent()
+	log.Printf("Running %s CLI for Git rebase conflict...", spec.DisplayName)
+	args := agentPromptArgs(spec.Kind, "", true, prompt)
+	_, out, err := runAgentCommand(ctx, spec, args)
+	return out, err
 }
 
 func commitAllChanges(ctx context.Context, message string) (repoCommitResult, error) {

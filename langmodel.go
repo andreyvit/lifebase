@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,12 +35,12 @@ func runModel(ctx context.Context, prompt string, historySuffix string, extraCon
 		}
 	}()
 
-	out, err := runClaudeCLI(ctx, prompt, historySuffix, extraContext)
+	out, err := runAgentCLI(ctx, prompt, historySuffix, extraContext)
 	if err != nil {
 		return "", err
 	}
 	out, action, err := handleAgentControlOutput(func(correctionPrompt string) (string, error) {
-		return runClaudeCLI(ctx, correctionPrompt, historySuffix, "")
+		return runAgentCLI(ctx, correctionPrompt, historySuffix, "")
 	}, out)
 	if err != nil {
 		return "", err
@@ -91,30 +89,49 @@ If you want LifeBase to restart, reply with exactly:
 If you do not want LifeBase to restart, reply with a normal user-facing message that does not contain %s.`, lifebaseRestartDirective, lifebaseRestartDirective, lifebaseRestartDirective)
 }
 
-type claudeCLIInvocation struct {
+type agentCLIInvocation struct {
 	InitPrompt string // non-empty only for new sessions
 	Prompt     string
 	Session    SessionState
 	StartNew   bool
+	Spec       agentSpec
 }
 
-func buildClaudeCLIInvocation(now time.Time, prompt string, extraContext string) (claudeCLIInvocation, error) {
-	now = now.Local()
-
+func loadPersistedAgentSession(kind agentKind) SessionState {
 	var sess SessionState
 	ReadState(func(s *State) {
-		sess = s.ClaudeSession
+		sess = *s.sessionPtr(kind)
 	})
-	startNew := shouldStartNewClaudeSession(now, &sess)
+	return sess
+}
+
+func persistAgentSession(kind agentKind, sess SessionState) {
+	UpdateState(func(s *State) {
+		*s.sessionPtr(kind) = sess
+	})
+}
+
+func buildAgentCLIInvocation(now time.Time, prompt string, extraContext string) (agentCLIInvocation, error) {
+	now = now.Local()
+	spec := configuredAgent()
+
+	UpdateState(func(s *State) {
+		s.expireSessionsForNewDay(now)
+	})
+
+	sess := loadPersistedAgentSession(spec.Kind)
+	startNew := shouldStartNewAgentSession(now, &sess)
 	if startNew {
-		id, err := newUUIDv4()
-		if err != nil {
-			return claudeCLIInvocation{}, err
-		}
 		sess = SessionState{
-			SessionID:      id,
 			FirstMessageAt: now,
 			LastMessageAt:  now,
+		}
+		if spec.Kind != agentCodex {
+			id, err := newUUIDv4()
+			if err != nil {
+				return agentCLIInvocation{}, err
+			}
+			sess.SessionID = id
 		}
 	} else {
 		sess.LastMessageAt = now
@@ -144,80 +161,59 @@ func buildClaudeCLIInvocation(now time.Time, prompt string, extraContext string)
 		initPrompt = strings.TrimSpace(Subst(initRaw, values))
 	}
 
-	return claudeCLIInvocation{
+	return agentCLIInvocation{
 		InitPrompt: initPrompt,
 		Prompt:     prompt,
 		Session:    sess,
 		StartNew:   startNew,
+		Spec:       spec,
 	}, nil
 }
 
-func runClaudeCLI(ctx context.Context, prompt string, historySuffix string, extraContext string) (string, error) {
-	log.Printf("Running Claude Code CLI...")
+func runAgentCLI(ctx context.Context, prompt string, historySuffix string, extraContext string) (string, error) {
 	now := time.Now().Local()
-	inv, err := buildClaudeCLIInvocation(now, prompt, extraContext)
+	inv, err := buildAgentCLIInvocation(now, prompt, extraContext)
 	if err != nil {
 		return "", err
 	}
+	log.Printf("Running %s CLI...", inv.Spec.DisplayName)
 
-	historyStartInvocation(now, historySuffix, "claude-cli", inv.Session.SessionID)
+	historyStartInvocation(now, historySuffix, inv.Spec.HistoryMode, inv.Session.SessionID)
 
 	if inv.StartNew && inv.InitPrompt != "" {
-		// Phase 1: init invocation
-		initArgs := []string{"--dangerously-skip-permissions", "--session-id", inv.Session.SessionID, "-p", inv.InitPrompt}
-		logClaudeCLICommand(initArgs)
+		initArgs := agentPromptArgs(inv.Spec.Kind, inv.Session.SessionID, true, inv.InitPrompt)
 		historyLogPrompt(inv.InitPrompt)
 
-		initCmd := exec.CommandContext(ctx, "claude", initArgs...)
-		initCmd.Dir = rootDir
-		initOut, err := initCmd.CombinedOutput()
-		historyLogAssistant(strings.TrimSpace(string(initOut)))
+		sid, initOut, err := runAgentCommand(ctx, inv.Spec, initArgs)
+		historyLogAssistant(initOut)
 		if err != nil {
-			return "", fmt.Errorf("claude init: %w: %s", err, strings.TrimSpace(string(initOut)))
+			return "", fmt.Errorf("%s init: %w", inv.Spec.Bin, err)
 		}
-
-		// Update session state after init
-		UpdateState(func(s *State) {
-			s.ClaudeSession = inv.Session
-		})
+		if inv.Spec.Kind == agentCodex {
+			if sid == "" {
+				return "", fmt.Errorf("codex init: missing session id")
+			}
+			inv.Session.SessionID = sid
+		}
+		persistAgentSession(inv.Spec.Kind, inv.Session)
 	}
 
-	// Phase 2 (or only phase for continuing sessions): actual prompt
-	var args []string
-	if inv.StartNew {
-		args = []string{"--dangerously-skip-permissions", "--resume", inv.Session.SessionID, "-p", inv.Prompt}
-	} else {
-		args = []string{"--dangerously-skip-permissions", "--resume", inv.Session.SessionID, "-p", inv.Prompt}
-	}
-	logClaudeCLICommand(args)
+	newSession := inv.StartNew && inv.InitPrompt == ""
+	args := agentPromptArgs(inv.Spec.Kind, inv.Session.SessionID, newSession, inv.Prompt)
 	historyLogPrompt(inv.Prompt)
 
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = rootDir
-	out, err := cmd.CombinedOutput()
+	sid, out, err := runAgentCommand(ctx, inv.Spec, args)
 	if err != nil {
-		historyLogAssistant(strings.TrimSpace(string(out)))
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		historyLogAssistant(out)
+		return "", err
+	}
+	if inv.Spec.Kind == agentCodex && sid != "" {
+		inv.Session.SessionID = sid
 	}
 
-	UpdateState(func(s *State) {
-		s.ClaudeSession = inv.Session
-	})
-
-	res := string(out)
-	historyLogAssistant(strings.TrimSpace(res))
-	return res, nil
-}
-
-func logClaudeCLICommand(args []string) {
-	quotedArgs := make([]string, len(args))
-	for i, arg := range args {
-		if strings.ContainsAny(arg, ` "'()[]<>*?!$`) {
-			arg = strconv.Quote(arg)
-		}
-		quotedArgs[i] = arg
-	}
-	log.Printf("$ claude %s", strings.Join(quotedArgs, " "))
+	persistAgentSession(inv.Spec.Kind, inv.Session)
+	historyLogAssistant(out)
+	return out, nil
 }
 
 // writeHealthMetricsFile writes health data to the configured health file path.

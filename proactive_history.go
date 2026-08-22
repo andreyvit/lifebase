@@ -11,7 +11,7 @@ import (
 const proactiveHistoryMaxEntries = 30
 
 // appendProactiveRecent appends the proactive output to the history file
-// so Claude can read it and avoid repetition, trimming old entries.
+// so the agent can read it and avoid repetition, trimming old entries.
 func appendProactiveRecent(name string, at time.Time, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {

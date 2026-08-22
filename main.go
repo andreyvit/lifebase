@@ -72,6 +72,11 @@ func main() {
 	if config.AgentSessionExtendIfInteractedWithin < 0 {
 		log.Fatalf("lifebase configuration error: agent_session_extend_if_interacted_within must be >= 0")
 	}
+	kind, err := parseAgent(config.Agent)
+	if err != nil {
+		log.Fatal(err)
+	}
+	config.Agent = string(kind)
 	configBaseDir := filepath.Dir(must(filepath.Abs(configFile)))
 	rootDir = configBaseDir
 	rawInputsDir = mustResolvePath(rootDir, config.RawInputsDir, "raw_inputs_dir")
@@ -183,22 +188,22 @@ func runIngestText(ctx context.Context, imagePaths []string, textTag, text strin
 		return fmt.Errorf("build ingest prompt: %v", err)
 	}
 
-	claudeOut, err := runIngestModel(ctx, prompt)
+	agentOut, err := runIngestModel(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("ingestion: %v", err)
 	}
-	claudeOut = normalizeAgentUserMessage(claudeOut)
+	agentOut = normalizeAgentUserMessage(agentOut)
 
-	if claudeOut == "" {
-		log.Printf("Claude produced empty output, nothing to send")
+	if agentOut == "" {
+		log.Printf("%s produced empty output, nothing to send", configuredAgent().DisplayName)
 		return nil
 	}
 
-	log.Printf("Sending Telegram message:\n%s\n\n", claudeOut)
-	if err := sendTelegramText(ctx, claudeOut); err != nil {
+	log.Printf("Sending Telegram message:\n%s\n\n", agentOut)
+	if err := sendTelegramText(ctx, agentOut); err != nil {
 		return fmt.Errorf("telegram send: %v", err)
 	}
-	log.Printf("Sent Claude output to Telegram (%d chars)", len(claudeOut))
+	log.Printf("Sent %s output to Telegram (%d chars)", configuredAgent().DisplayName, len(agentOut))
 
 	return nil
 }
@@ -250,7 +255,7 @@ func escapeTagAttr(s string) string {
 	return replacer.Replace(s)
 }
 
-func shouldStartNewClaudeSession(now time.Time, sess *SessionState) bool {
+func shouldStartNewAgentSession(now time.Time, sess *SessionState) bool {
 	if sess.SessionID == "" {
 		return true
 	}

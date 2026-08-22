@@ -139,8 +139,9 @@ func processIngestTask(ctx context.Context, task ingestTask) error {
 }
 
 func checkDaemonDependencies() {
-	if _, err := exec.LookPath("claude"); err != nil {
-		log.Fatal("claude not found in PATH. Please install Claude Code CLI (https://docs.anthropic.com/en/docs/claude-code).")
+	spec := configuredAgent()
+	if _, err := exec.LookPath(spec.Bin); err != nil {
+		log.Fatal(spec.InstallHint)
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		log.Fatal("ffmpeg not found in PATH. Please install it, e.g. 'brew install ffmpeg'.")

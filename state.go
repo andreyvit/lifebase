@@ -27,8 +27,11 @@ type State struct {
 	PendingTelegramImages []PendingTelegramImage `json:"pending_telegram_images,omitempty"`
 	// LastIncomingAt stores the timestamp of the last incoming item (recording or Telegram voice/text/image, excluding commands).
 	LastIncomingAt time.Time `json:"last_incoming_at,omitzero"`
-	// ClaudeSession is the active Claude Code session for automation runs; it is rotated daily.
+	// Per-agent sessions for automation runs. Switching agent during the day
+	// reuses that CLI's existing session; /new and the daily boundary clear all three.
 	ClaudeSession SessionState `json:"claude_session,omitzero"`
+	CodexSession  SessionState `json:"codex_session,omitzero"`
+	GrokSession   SessionState `json:"grok_session,omitzero"`
 	// IsRestartingMyself is set just before LifeBase exits intentionally so the
 	// next launch can notify the active agent session that restart completed.
 	IsRestartingMyself bool `json:"is_restarting_myself,omitempty"`
@@ -44,8 +47,32 @@ type SessionState struct {
 	LastMessageAt  time.Time `json:"last_at,omitzero"`
 }
 
+func (s *State) sessionPtr(kind agentKind) *SessionState {
+	switch kind {
+	case agentCodex:
+		return &s.CodexSession
+	case agentGrok:
+		return &s.GrokSession
+	default:
+		return &s.ClaudeSession
+	}
+}
+
 func (s *State) ResetSession() {
 	s.ClaudeSession = SessionState{}
+	s.CodexSession = SessionState{}
+	s.GrokSession = SessionState{}
+}
+
+func (s *State) expireSessionsForNewDay(now time.Time) {
+	expire := func(sess *SessionState) {
+		if sess.SessionID != "" && shouldStartNewAgentSession(now, sess) {
+			*sess = SessionState{}
+		}
+	}
+	expire(&s.ClaudeSession)
+	expire(&s.CodexSession)
+	expire(&s.GrokSession)
 }
 
 var (
@@ -98,6 +125,7 @@ func initState() {
 	if s.ProactiveLastRun == nil {
 		s.ProactiveLastRun = make(map[string]time.Time)
 	}
+	s.expireSessionsForNewDay(time.Now().Local())
 
 	// 3) Persist updated state
 	stateMu.Lock()

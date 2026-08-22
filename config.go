@@ -14,6 +14,10 @@ type Config struct {
 	PromptsDir   string `json:"prompts_dir"`
 	StateFile    string `json:"state_file"`
 
+	// Agent is the coding-agent CLI used for reasoning: "claude", "grok", or "codex".
+	// Default: "claude".
+	Agent string `json:"agent"`
+
 	AudioRecorderDir string `json:"audio_recorder_dir"`
 
 	AppleHealthExportDir string `json:"apple_health_export_dir"`
@@ -30,7 +34,7 @@ type Config struct {
 	HealthFile string `json:"health_file"`
 
 	// ProactiveHistoryFile is the path (relative to the lifebase.yaml directory) where recent
-	// proactive message outputs are logged so Claude can avoid repetition.
+	// proactive message outputs are logged so the agent can avoid repetition.
 	// Default: "Generated/proactive-history.md".
 	ProactiveHistoryFile string `json:"proactive_history_file"`
 
@@ -50,6 +54,7 @@ func DefaultConfig() Config {
 		RawInputsDir:                         "Raw",
 		PromptsDir:                           "Prompts",
 		StateFile:                            "lifebase-state.json",
+		Agent:                                "claude",
 		SecretsFile:                          "lifebase-secrets.yaml",
 		Language:                             "en",
 		HealthFile:                           "Generated/health.md",

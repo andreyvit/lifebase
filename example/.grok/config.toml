@@ -1,0 +1,11 @@
+# Project MCP servers for Grok. The same warm HTTP daemons used by Claude
+# and Codex are referenced here.
+#
+# Secrets for those daemons stay in `.claude/settings.local.json`.
+# Copy this file to your LifeBase content repo as `.grok/config.toml`.
+
+[mcp_servers.telegram]
+url = "http://127.0.0.1:43123/mcp"
+
+[mcp_servers.fastmail]
+url = "http://127.0.0.1:43124/mcp"
