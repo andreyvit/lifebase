@@ -54,12 +54,41 @@ func logWriteOutputTag(fileBasename string) string {
 	return fileBasename + "/write"
 }
 
+const (
+	cancelButtonText = "Cancel"
+	pendingInputTTL  = 15 * time.Minute
+)
+
 func sendTelegramText(ctx context.Context, text string) error {
 	return sendTelegramTextTagged(ctx, "ai", text)
 }
 
 func sendTelegramTextTagged(ctx context.Context, outputTag, text string) error {
-	if err := sendTelegramTextRaw(ctx, text); err != nil {
+	return sendTelegramReply(ctx, outputTag, text, nil)
+}
+
+func sendTelegramKeyboard(ctx context.Context, outputTag, text string, rows [][]tgKeyboardButton) error {
+	return sendTelegramReply(ctx, outputTag, text, tgReplyKeyboardMarkup{
+		Keyboard:        rows,
+		ResizeKeyboard:  true,
+		OneTimeKeyboard: true,
+	})
+}
+
+func sendTelegramClearKeyboard(ctx context.Context, outputTag, text string) error {
+	return sendTelegramReply(ctx, outputTag, text, tgReplyKeyboardRemove{RemoveKeyboard: true})
+}
+
+func replyTelegramTopLevel(ctx context.Context, outputTag, text string) error {
+	UpdateState(func(s *State) {
+		s.PendingLog = nil
+		s.PendingMenu = nil
+	})
+	return sendTelegramClearKeyboard(ctx, outputTag, text)
+}
+
+func sendTelegramReply(ctx context.Context, outputTag, text string, replyMarkup any) error {
+	if err := sendTelegramTextRaw(ctx, text, replyMarkup); err != nil {
 		return err
 	}
 	outputTag = strings.TrimSpace(outputTag)
@@ -69,7 +98,7 @@ func sendTelegramTextTagged(ctx context.Context, outputTag, text string) error {
 	return nil
 }
 
-func sendTelegramTextRaw(ctx context.Context, text string) error {
+func sendTelegramTextRaw(ctx context.Context, text string, replyMarkup any) error {
 	log.Printf("Sending Telegram message:\n%s\n\n", text)
 
 	if strings.TrimSpace(secrets.TelegramBotToken) == "" || strings.TrimSpace(secrets.TelegramChatID) == "" {
@@ -78,7 +107,13 @@ func sendTelegramTextRaw(ctx context.Context, text string) error {
 
 	chunks := splitTelegramChunks(text, 3500)
 	for i, ch := range chunks {
-		if err := retry(func() error { return telegramSendMessage(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, ch) }); err != nil {
+		var markup any
+		if i == len(chunks)-1 {
+			markup = replyMarkup
+		}
+		if err := retry(func() error {
+			return telegramSendMessage(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, ch, markup)
+		}); err != nil {
 			if len(chunks) > 1 {
 				return fmt.Errorf("sending chunk %d/%d: %w", i+1, len(chunks), err)
 			}
@@ -95,12 +130,15 @@ func sendTelegramChatAction(ctx context.Context, action string) error {
 	return telegramSendChatAction(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, action)
 }
 
-func telegramSendMessage(ctx context.Context, botToken, chatID, text string) error {
+func telegramSendMessage(ctx context.Context, botToken, chatID, text string, replyMarkup any) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     text,
 		"disable_web_page_preview": true,
+	}
+	if replyMarkup != nil {
+		payload["reply_markup"] = replyMarkup
 	}
 	body, _ := json.Marshal(payload)
 
@@ -350,41 +388,13 @@ func pollTelegram(ctx context.Context, tasks chan<- ingestTask) {
 				}
 			}
 
-			// If there is a pending log input, consume this message as its text
-			var pending *PendingLogInput
-			ReadState(func(st *State) {
-				if st.PendingLog != nil && time.Now().Before(st.PendingLog.ExpiresAt) {
-					pending = st.PendingLog
-				}
-			})
-			if pending != nil && pending.ChatID == msg.Chat.ID {
-				spec, err := findLogSpec(pending.FileBasename)
-				if err != nil {
-					log.Printf("Telegram: log discovery failed: %v", err)
-					spec = nil
-				}
-				if spec != nil {
-					tm := time.Unix(msg.Date, 0).Local()
-					updateLastIncoming(tm)
-					if _, err := addLogEntry(ctx, *spec, tm, text); err != nil {
-						_ = sendTelegramText(ctx, fmt.Sprintf("Failed to add to %s: %v", pending.Title, err))
-						// keep pending to allow retry
-					} else {
-						// clear pending
-						UpdateState(func(st *State) { st.PendingLog = nil })
-						if out, err := renderLastLogEntries(*spec, tm, logEntriesAfterWrite); err == nil {
-							_ = sendTelegramTextTagged(ctx, logWriteOutputTag(spec.FileBasename), out)
-						} else {
-							_ = sendTelegramTextTagged(ctx, logWriteOutputTag(spec.FileBasename), fmt.Sprintf("Added to %s, but failed to read recent entries: %v", pending.Title, err))
-						}
-					}
-					continue
-				}
+			msgTime := time.Unix(msg.Date, 0).Local()
+			if handleTelegramPendingInput(ctx, text, msgTime, msg.Chat.ID) {
+				continue
 			}
 			// Write to RawInputs as a timestamped .md and queue for ingestion
-			tm := time.Unix(msg.Date, 0).Local()
-			updateLastIncoming(tm)
-			fn := uniqueRawInputPath(tm, "tg")
+			updateLastIncoming(msgTime)
+			fn := uniqueRawInputPath(msgTime, "tg")
 			if err := os.WriteFile(fn, []byte(text+"\n"), 0666); err != nil {
 				log.Printf("Telegram: write rawinput failed: %v", err)
 				_ = sendTelegramText(ctx, fmt.Sprintf("Telegram ingest failed writing raw input: %v", err))
@@ -429,44 +439,52 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		var paused bool
 		ReadState(func(st *State) { paused = st.Paused })
 		if paused {
-			_ = sendTelegramText(ctx, "Already paused.")
+			_ = replyTelegramTopLevel(ctx, "ai", "Already paused.")
 			return true
 		}
 		UpdateState(func(st *State) { st.Paused = true })
-		_ = sendTelegramText(ctx, "Paused auto-processing.")
+		_ = replyTelegramTopLevel(ctx, "ai", "Paused auto-processing.")
 		_ = updateTelegramCommands(ctx)
 		return true
 	case "resume":
 		var paused bool
 		ReadState(func(st *State) { paused = st.Paused })
 		if !paused {
-			_ = sendTelegramText(ctx, "Already running.")
+			_ = replyTelegramTopLevel(ctx, "ai", "Already running.")
 			return true
 		}
 		UpdateState(func(st *State) { st.Paused = false })
-		_ = sendTelegramText(ctx, "Resumed auto-processing.")
+		_ = replyTelegramTopLevel(ctx, "ai", "Resumed auto-processing.")
 		_ = updateTelegramCommands(ctx)
 		return true
 	case "model":
-		_ = sendTelegramText(ctx, applyModelCommand(rest))
+		if strings.TrimSpace(rest) == "" {
+			presentModelMenu(ctx, chatID)
+			return true
+		}
+		_ = replyTelegramTopLevel(ctx, "ai", applyModelCommand(rest))
 		return true
 	case "effort":
-		_ = sendTelegramText(ctx, applyEffortCommand(rest))
+		if strings.TrimSpace(rest) == "" {
+			presentEffortMenu(ctx, chatID)
+			return true
+		}
+		_ = replyTelegramTopLevel(ctx, "ai", applyEffortCommand(rest))
 		return true
 	case "new":
 		if strings.TrimSpace(rest) != "" {
-			_ = sendTelegramText(ctx, "Usage: /new (no arguments).")
+			_ = replyTelegramTopLevel(ctx, "ai", "Usage: /new (no arguments).")
 			return true
 		}
 		UpdateState(func(st *State) { st.ResetSession() })
-		_ = sendTelegramText(ctx, "OK. Next run will start a new session.")
+		_ = replyTelegramTopLevel(ctx, "ai", "OK. Next run will start a new session.")
 		return true
 	case "restart":
 		if strings.TrimSpace(rest) != "" {
-			_ = sendTelegramText(ctx, "Usage: /restart (no arguments).")
+			_ = replyTelegramTopLevel(ctx, "ai", "Usage: /restart (no arguments).")
 			return true
 		}
-		_ = sendTelegramText(ctx, "Restarting.")
+		_ = replyTelegramTopLevel(ctx, "ai", "Restarting.")
 		requestSelfRestart()
 		return true
 	case "sync":
@@ -476,49 +494,41 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		}
 		res, err := syncAllChanges(ctx, commitMsg)
 		if err != nil {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Sync failed: %v", err))
+			_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Sync failed: %v", err))
 			return true
 		}
 		if res.DidCommit {
 			if res.CommitSHA != "" {
-				_ = sendTelegramText(ctx, fmt.Sprintf("Synced: committed, pulled/rebased, and pushed: %s", res.CommitSHA))
+				_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Synced: committed, pulled/rebased, and pushed: %s", res.CommitSHA))
 			} else {
-				_ = sendTelegramText(ctx, "Synced: committed, pulled/rebased, and pushed.")
+				_ = replyTelegramTopLevel(ctx, "ai", "Synced: committed, pulled/rebased, and pushed.")
 			}
 			return true
 		}
 		if res.CommitSHA != "" {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Synced: pulled/rebased and pushed. No local changes committed. HEAD: %s", res.CommitSHA))
+			_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Synced: pulled/rebased and pushed. No local changes committed. HEAD: %s", res.CommitSHA))
 		} else {
-			_ = sendTelegramText(ctx, "Synced: pulled/rebased and pushed. No local changes committed.")
+			_ = replyTelegramTopLevel(ctx, "ai", "Synced: pulled/rebased and pushed. No local changes committed.")
 		}
 		return true
 	case "cancel":
-		var hadPending bool
-		ReadState(func(st *State) {
-			hadPending = st.PendingLog != nil || len(st.PendingTelegramImages) > 0
-		})
-		UpdateState(func(st *State) {
-			st.PendingLog = nil
-			st.PendingTelegramImages = nil
-		})
-		if hadPending {
-			_ = sendTelegramText(ctx, "Canceled pending input.")
+		if cancelAllPending() {
+			_ = sendTelegramClearKeyboard(ctx, "ai", "Canceled.")
 		} else {
-			_ = sendTelegramText(ctx, "Nothing to cancel.")
+			_ = sendTelegramClearKeyboard(ctx, "ai", "Nothing to cancel.")
 		}
 		return true
 	case "health":
 		if strings.TrimSpace(appleHealthExportDir) == "" {
-			_ = sendTelegramText(ctx, "Apple Health is disabled (configure apple_health_export_dir in lifebase config).")
+			_ = replyTelegramTopLevel(ctx, "ai", "Apple Health is disabled (configure apple_health_export_dir in lifebase config).")
 			return true
 		}
 		out, err := renderAppleHealthLast48Hours(msgTime)
 		if err != nil {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Apple Health failed: %v", err))
+			_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Apple Health failed: %v", err))
 			return true
 		}
-		_ = sendTelegramText(ctx, out)
+		_ = replyTelegramTopLevel(ctx, "ai", out)
 		return true
 	}
 
@@ -533,9 +543,9 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		}
 		key := strings.TrimSpace(p.Key)
 		if key != "" && cmd == key {
-			_ = sendTelegramText(ctx, fmt.Sprintf("Running %s…", p.Name))
+			_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Running %s…", p.Name))
 			if err := runProactivePrompt(ctx, p, proactiveRunKey(p)); err != nil {
-				_ = sendTelegramText(ctx, fmt.Sprintf("Failed: %v", err))
+				_ = replyTelegramTopLevel(ctx, "ai", fmt.Sprintf("Failed: %v", err))
 			}
 			return true
 		}
@@ -559,9 +569,25 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 					}
 				})
 
-				// Start pending input flow instead of forcing inline argument
-				until := time.Now().Add(15 * time.Minute)
+				tag := logPromptOutputTag(ls.FileBasename)
+				// Context first, then the prompt with a Cancel keyboard so the
+				// custom keyboard stays visible while waiting for entry text.
+				if showRecent {
+					if out, err := renderLastLogEntries(ls, msgTime, logEntriesBeforeInput); err == nil {
+						_ = sendTelegramTextTagged(ctx, tag, out)
+					}
+				}
+				if prefaceFn := ls.prefacePath(); prefaceFn != "" {
+					if b, err := os.ReadFile(prefaceFn); err == nil {
+						pref := strings.TrimRight(string(b), "\n\r \t")
+						if pref != "" {
+							_ = sendTelegramTextTagged(ctx, tag, pref)
+						}
+					}
+				}
+				until := time.Now().Add(pendingInputTTL)
 				UpdateState(func(st *State) {
+					st.PendingMenu = nil
 					st.PendingLog = &PendingLogInput{
 						FileBasename: ls.FileBasename,
 						Title:        ls.FileBasename,
@@ -569,39 +595,168 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 						ExpiresAt:    until,
 					}
 				})
-				_ = sendTelegramTextTagged(ctx, logPromptOutputTag(ls.FileBasename), fmt.Sprintf("%s — waiting for entry text. Send a message now (or /cancel).", ls.FileBasename))
-				// If a preface file FooLog.md exists, show its content while awaiting input.
-				if prefaceFn := ls.prefacePath(); prefaceFn != "" {
-					if b, err := os.ReadFile(prefaceFn); err == nil {
-						pref := strings.TrimRight(string(b), "\n\r \t")
-						if pref != "" {
-							_ = sendTelegramTextTagged(ctx, logPromptOutputTag(ls.FileBasename), pref)
-						}
-					}
-				}
-				// Also show recent entries for context
-				if showRecent {
-					if out, err := renderLastLogEntries(ls, msgTime, logEntriesBeforeInput); err == nil {
-						_ = sendTelegramTextTagged(ctx, logPromptOutputTag(ls.FileBasename), out)
-					}
-				}
+				_ = sendTelegramKeyboard(ctx, tag, fmt.Sprintf("%s — waiting for entry text. Send a message now, or Cancel.", ls.FileBasename), cancelKeyboard())
 				return true
 			}
 			// Add entry at current local time
 			if _, err := addLogEntry(ctx, ls, msgTime, rest); err != nil {
-				_ = sendTelegramTextTagged(ctx, logWriteOutputTag(ls.FileBasename), fmt.Sprintf("Failed to add to %s: %v", ls.FileBasename, err))
+				_ = replyTelegramTopLevel(ctx, logWriteOutputTag(ls.FileBasename), fmt.Sprintf("Failed to add to %s: %v", ls.FileBasename, err))
 				return true
 			}
 			if out, err := renderLastLogEntries(ls, msgTime, logEntriesAfterWrite); err == nil {
-				_ = sendTelegramTextTagged(ctx, logWriteOutputTag(ls.FileBasename), out)
+				_ = replyTelegramTopLevel(ctx, logWriteOutputTag(ls.FileBasename), out)
 			} else {
-				_ = sendTelegramTextTagged(ctx, logWriteOutputTag(ls.FileBasename), fmt.Sprintf("Added to %s, but failed to read recent entries: %v", ls.FileBasename, err))
+				_ = replyTelegramTopLevel(ctx, logWriteOutputTag(ls.FileBasename), fmt.Sprintf("Added to %s, but failed to read recent entries: %v", ls.FileBasename, err))
 			}
 			return true
 		}
 	}
 
-	_ = sendTelegramText(ctx, "Unknown command.")
+	_ = replyTelegramTopLevel(ctx, "ai", "Unknown command.")
+	return true
+}
+
+func presentModelMenu(ctx context.Context, chatID int64) {
+	UpdateState(func(s *State) {
+		s.PendingLog = nil
+		s.PendingMenu = &PendingMenu{
+			Kind:      pendingMenuModel,
+			ChatID:    chatID,
+			ExpiresAt: time.Now().Add(pendingInputTTL),
+		}
+	})
+	_ = sendTelegramKeyboard(ctx, "model/menu", renderModelMenu(currentModelSelection()), modelMenuKeyboard())
+}
+
+func presentEffortMenu(ctx context.Context, chatID int64) {
+	UpdateState(func(s *State) {
+		s.PendingLog = nil
+		s.PendingMenu = &PendingMenu{
+			Kind:      pendingMenuEffort,
+			ChatID:    chatID,
+			ExpiresAt: time.Now().Add(pendingInputTTL),
+		}
+	})
+	_ = sendTelegramKeyboard(ctx, "effort/menu", renderEffortMenu(currentModelSelection()), effortMenuKeyboard())
+}
+
+func isCancelText(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), cancelButtonText)
+}
+
+func cancelAllPending() bool {
+	var had bool
+	UpdateState(func(s *State) {
+		had = s.PendingLog != nil || s.PendingMenu != nil || len(s.PendingTelegramImages) > 0
+		s.PendingLog = nil
+		s.PendingMenu = nil
+		s.PendingTelegramImages = nil
+	})
+	return had
+}
+
+func modelMenuKeyboard() [][]tgKeyboardButton {
+	rows := make([][]tgKeyboardButton, 0, len(modelCatalog)+1)
+	for _, spec := range modelCatalog {
+		rows = append(rows, []tgKeyboardButton{{Text: spec.Label}})
+	}
+	rows = append(rows, cancelKeyboard()...)
+	return rows
+}
+
+func effortMenuKeyboard() [][]tgKeyboardButton {
+	rows := make([][]tgKeyboardButton, 0, len(effortCatalog)+1)
+	for _, e := range effortCatalog {
+		rows = append(rows, []tgKeyboardButton{{Text: e.Label}})
+	}
+	rows = append(rows, cancelKeyboard()...)
+	return rows
+}
+
+func cancelKeyboard() [][]tgKeyboardButton {
+	return [][]tgKeyboardButton{{{Text: cancelButtonText}}}
+}
+
+// handleTelegramPendingInput consumes text meant for a reply-keyboard submenu
+// or a pending log entry. Returns true if the message should not be ingested.
+func handleTelegramPendingInput(ctx context.Context, text string, msgTime time.Time, chatID int64) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if isCancelText(text) {
+		if cancelAllPending() {
+			_ = sendTelegramClearKeyboard(ctx, "ai", "Canceled.")
+		} else {
+			_ = sendTelegramClearKeyboard(ctx, "ai", "Nothing to cancel.")
+		}
+		return true
+	}
+
+	var menu PendingMenu
+	var hasMenu bool
+	ReadState(func(s *State) {
+		if s.PendingMenu != nil && time.Now().Before(s.PendingMenu.ExpiresAt) && s.PendingMenu.ChatID == chatID {
+			menu = *s.PendingMenu
+			hasMenu = true
+		}
+	})
+	if hasMenu {
+		switch menu.Kind {
+		case pendingMenuModel:
+			reply, ok := applyModelChoice(text)
+			if ok {
+				UpdateState(func(s *State) { s.PendingMenu = nil })
+				_ = sendTelegramClearKeyboard(ctx, "ai", reply)
+				return true
+			}
+			_ = sendTelegramKeyboard(ctx, "model/menu", reply+"\n\nChoose a model:", modelMenuKeyboard())
+			return true
+		case pendingMenuEffort:
+			reply, ok := applyEffortChoice(text)
+			if ok {
+				UpdateState(func(s *State) { s.PendingMenu = nil })
+				_ = sendTelegramClearKeyboard(ctx, "ai", reply)
+				return true
+			}
+			_ = sendTelegramKeyboard(ctx, "effort/menu", reply+"\n\nChoose reasoning effort:", effortMenuKeyboard())
+			return true
+		default:
+			UpdateState(func(s *State) { s.PendingMenu = nil })
+			_ = sendTelegramClearKeyboard(ctx, "ai", "Canceled.")
+			return true
+		}
+	}
+
+	var pending *PendingLogInput
+	ReadState(func(st *State) {
+		if st.PendingLog != nil && time.Now().Before(st.PendingLog.ExpiresAt) {
+			p := *st.PendingLog
+			pending = &p
+		}
+	})
+	if pending == nil || pending.ChatID != chatID {
+		return false
+	}
+	spec, err := findLogSpec(pending.FileBasename)
+	if err != nil {
+		log.Printf("Telegram: log discovery failed: %v", err)
+		return false
+	}
+	if spec == nil {
+		return false
+	}
+	updateLastIncoming(msgTime)
+	if _, err := addLogEntry(ctx, *spec, msgTime, text); err != nil {
+		_ = sendTelegramText(ctx, fmt.Sprintf("Failed to add to %s: %v", pending.Title, err))
+		return true
+	}
+	UpdateState(func(st *State) { st.PendingLog = nil })
+	if out, err := renderLastLogEntries(*spec, msgTime, logEntriesAfterWrite); err == nil {
+		_ = sendTelegramClearKeyboard(ctx, logWriteOutputTag(spec.FileBasename), out)
+	} else {
+		_ = sendTelegramClearKeyboard(ctx, logWriteOutputTag(spec.FileBasename), fmt.Sprintf("Added to %s, but failed to read recent entries: %v", pending.Title, err))
+	}
 	return true
 }
 
@@ -641,6 +796,10 @@ func updateTelegramCommands(ctx context.Context) error {
 	if !seen["effort"] {
 		seen["effort"] = true
 		cmds = append(cmds, tgBotCommand{Command: "effort", Description: "Choose reasoning effort"})
+	}
+	if !seen["cancel"] {
+		seen["cancel"] = true
+		cmds = append(cmds, tgBotCommand{Command: "cancel", Description: "Cancel menu or pending input"})
 	}
 	if !seen["new"] {
 		seen["new"] = true
@@ -688,6 +847,20 @@ func updateTelegramCommands(ctx context.Context) error {
 type tgBotCommand struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
+}
+
+type tgKeyboardButton struct {
+	Text string `json:"text"`
+}
+
+type tgReplyKeyboardMarkup struct {
+	Keyboard        [][]tgKeyboardButton `json:"keyboard"`
+	ResizeKeyboard  bool                 `json:"resize_keyboard"`
+	OneTimeKeyboard bool                 `json:"one_time_keyboard"`
+}
+
+type tgReplyKeyboardRemove struct {
+	RemoveKeyboard bool `json:"remove_keyboard"`
 }
 
 func telegramSetMyCommands(ctx context.Context, botToken string, commands []tgBotCommand) error {

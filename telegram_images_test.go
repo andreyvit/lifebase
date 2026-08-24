@@ -109,6 +109,11 @@ func TestHandleTelegramCommandCancelClearsPendingTelegramImages(t *testing.T) {
 			ChatID:       123,
 			ExpiresAt:    now.Add(15 * time.Minute),
 		}
+		st.PendingMenu = &PendingMenu{
+			Kind:      pendingMenuModel,
+			ChatID:    123,
+			ExpiresAt: now.Add(15 * time.Minute),
+		}
 		st.PendingTelegramImages = []PendingTelegramImage{
 			{Path: filepath.Join(t.TempDir(), "queued.jpg"), ReceivedAt: now},
 		}
@@ -121,6 +126,9 @@ func TestHandleTelegramCommandCancelClearsPendingTelegramImages(t *testing.T) {
 	ReadState(func(st *State) {
 		if st.PendingLog != nil {
 			t.Fatalf("PendingLog = %#v, want nil", st.PendingLog)
+		}
+		if st.PendingMenu != nil {
+			t.Fatalf("PendingMenu = %#v, want nil", st.PendingMenu)
 		}
 		if len(st.PendingTelegramImages) != 0 {
 			t.Fatalf("PendingTelegramImages = %#v, want empty", st.PendingTelegramImages)

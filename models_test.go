@@ -118,8 +118,8 @@ func TestRenderMenusHideIDs(t *testing.T) {
 	if !strings.Contains(menu, "Current: Claude Fable, Medium") {
 		t.Fatalf("model menu current:\n%s", menu)
 	}
-	if !strings.Contains(menu, "• Claude Fable") {
-		t.Fatalf("model menu mark:\n%s", menu)
+	if !strings.Contains(menu, "Choose a model:") {
+		t.Fatalf("model menu prompt:\n%s", menu)
 	}
 	effort := renderEffortMenu(sel)
 	if strings.Contains(effort, "xhigh") || strings.Contains(effort, "medium") {
@@ -127,6 +127,9 @@ func TestRenderMenusHideIDs(t *testing.T) {
 	}
 	if !strings.Contains(effort, "Current: Medium") {
 		t.Fatalf("effort menu current:\n%s", effort)
+	}
+	if !strings.Contains(effort, "Choose reasoning effort:") {
+		t.Fatalf("effort menu prompt:\n%s", effort)
 	}
 	grokMax := renderEffortMenu(ModelSelection{Model: "grok", Effort: effortMax})
 	if !strings.Contains(grokMax, "Extra High on Grok 4.6") {

@@ -226,7 +226,7 @@ Once Telegram is configured and the daemon is running, you can:
 - send voice notes
 - send photos or image files
 - use slash commands like `/morning`
-- use built-ins like `/pause`, `/resume`, `/model`, `/effort`, `/new`, `/restart`, `/sync`, and `/health`
+- use built-ins like `/pause`, `/resume`, `/model`, `/effort`, `/cancel`, `/new`, `/restart`, `/sync`, and `/health`
 
 Image behavior:
 
@@ -450,7 +450,7 @@ LifeBase is intentionally simple, but there are a few important moving parts.
 
 ### A persistent agent session
 
-LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. Telegram `/model` picks the provider and model (default: Claude Fable); `/effort` picks reasoning depth (default: Medium). Those overrides live in `state_file`. Claude, Grok, and Codex each have their own session, so switching model to another provider during the day resumes that CLI's existing thread instead of starting over.
+LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. Telegram `/model` picks the provider and model (default: Claude Fable); `/effort` picks reasoning depth (default: Medium). Without arguments they open a Telegram reply keyboard; Cancel or `/cancel` dismisses that menu, a pending log prompt, or queued uncaptained images. Those overrides live in `state_file`. Claude, Grok, and Codex each have their own session, so switching model to another provider during the day resumes that CLI's existing thread instead of starting over.
 
 Each session is rotated daily, and a new day expires every agent's session (not only the one you are using):
 

@@ -22,6 +22,8 @@ type State struct {
 	ProactiveLastRun map[string]time.Time `json:"proactive_last_run"`
 	// PendingLog holds a pending log entry request awaiting next message text.
 	PendingLog *PendingLogInput `json:"pending_log,omitempty"`
+	// PendingMenu holds a Telegram reply-keyboard choice (model/effort) awaiting a tap.
+	PendingMenu *PendingMenu `json:"pending_menu,omitempty"`
 	// PendingTelegramImages holds uncaptained Telegram images waiting for the next text, voice,
 	// or captioned image batch.
 	PendingTelegramImages []PendingTelegramImage `json:"pending_telegram_images,omitempty"`
@@ -150,6 +152,18 @@ type PendingLogInput struct {
 	Title        string    `json:"title"`
 	ChatID       int64     `json:"chat_id"`
 	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+const (
+	pendingMenuModel  = "model"
+	pendingMenuEffort = "effort"
+)
+
+// PendingMenu describes a Telegram reply-keyboard submenu awaiting a choice.
+type PendingMenu struct {
+	Kind      string    `json:"kind"`
+	ChatID    int64     `json:"chat_id"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type PendingTelegramImage struct {

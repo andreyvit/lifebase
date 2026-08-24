@@ -210,45 +210,46 @@ func renderModelMenu(sel ModelSelection) string {
 	if !ok {
 		current, _ = lookupModel(defaultModelID)
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Current: %s, %s\n", current.Label, effortLabel(sel.Effort))
-	for _, spec := range modelCatalog {
-		b.WriteByte('\n')
-		if spec.ID == current.ID {
-			b.WriteString("• ")
-		}
-		b.WriteString(spec.Label)
-	}
-	return b.String()
+	return fmt.Sprintf("Current: %s, %s\n\nChoose a model:", current.Label, effortLabel(sel.Effort))
 }
 
 func applyModelCommand(rest string) string {
+	msg, _ := applyModelChoice(rest)
+	return msg
+}
+
+func applyModelChoice(rest string) (string, bool) {
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
-		return renderModelMenu(currentModelSelection())
+		return renderModelMenu(currentModelSelection()), false
 	}
 	spec, err := matchModel(rest)
 	if err != nil {
-		return err.Error()
+		return err.Error(), false
 	}
 	if hint := agentBinaryMissing(spec.Agent); hint != "" {
-		return hint
+		return hint, false
 	}
 	setSelectedModel(spec.ID)
-	return "Using " + spec.Label
+	return "Using " + spec.Label, true
 }
 
 func applyEffortCommand(rest string) string {
+	msg, _ := applyEffortChoice(rest)
+	return msg
+}
+
+func applyEffortChoice(rest string) (string, bool) {
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
-		return renderEffortMenu(currentModelSelection())
+		return renderEffortMenu(currentModelSelection()), false
 	}
 	e, err := matchEffort(rest)
 	if err != nil {
-		return err.Error()
+		return err.Error(), false
 	}
 	setSelectedEffort(e.ID)
-	return "Effort: " + e.Label
+	return "Effort: " + e.Label, true
 }
 
 func renderEffortMenu(sel ModelSelection) string {
@@ -263,12 +264,6 @@ func renderEffortMenu(sel ModelSelection) string {
 	} else {
 		fmt.Fprintf(&b, "Current: %s\n", effortLabel(sel.Effort))
 	}
-	for _, e := range effortCatalog {
-		b.WriteByte('\n')
-		if e.ID == sel.Effort {
-			b.WriteString("• ")
-		}
-		b.WriteString(e.Label)
-	}
+	b.WriteString("\nChoose reasoning effort:")
 	return b.String()
 }
