@@ -8,26 +8,60 @@ import (
 )
 
 func TestModelAndEffortKeyboardsIncludeCancel(t *testing.T) {
-	models := modelMenuKeyboard()
-	if len(models) != len(modelCatalog)+1 {
-		t.Fatalf("model keyboard rows = %d, want %d", len(models), len(modelCatalog)+1)
+	assertMenuKeyboard(t, modelMenuKeyboard(), modelMenuLabels(), 2)
+	assertMenuKeyboard(t, effortMenuKeyboard(), effortMenuLabels(), 3)
+}
+
+func TestPackKeyboardRows(t *testing.T) {
+	rows := packKeyboardRows([]string{"A", "B", "C", "D", "E"}, 3)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
 	}
-	if models[len(models)-1][0].Text != cancelButtonText {
-		t.Fatalf("model keyboard last = %q, want %q", models[len(models)-1][0].Text, cancelButtonText)
+	if got := keyboardRowTexts(rows[0]); strings.Join(got, ",") != "A,B,C" {
+		t.Fatalf("row0 = %v", got)
 	}
-	for i, spec := range modelCatalog {
-		if models[i][0].Text != spec.Label {
-			t.Fatalf("model keyboard[%d] = %q, want %q", i, models[i][0].Text, spec.Label)
+	if got := keyboardRowTexts(rows[1]); strings.Join(got, ",") != "D,E" {
+		t.Fatalf("row1 = %v", got)
+	}
+}
+
+func assertMenuKeyboard(t *testing.T, rows [][]tgKeyboardButton, labels []string, cols int) {
+	t.Helper()
+	if len(rows) == 0 {
+		t.Fatal("empty keyboard")
+	}
+	last := rows[len(rows)-1]
+	if len(last) != 1 || last[0].Text != cancelButtonText {
+		t.Fatalf("last row = %#v, want lone Cancel", last)
+	}
+	got := flattenKeyboardLabels(rows[:len(rows)-1])
+	if strings.Join(got, ",") != strings.Join(labels, ",") {
+		t.Fatalf("labels = %v, want %v", got, labels)
+	}
+	for i, row := range rows[:len(rows)-1] {
+		if len(row) == 0 || len(row) > cols {
+			t.Fatalf("row %d has %d buttons, want 1..%d", i, len(row), cols)
+		}
+		if i < len(rows)-2 && len(row) != cols {
+			t.Fatalf("row %d has %d buttons, want %d on a full row", i, len(row), cols)
 		}
 	}
+}
 
-	efforts := effortMenuKeyboard()
-	if len(efforts) != len(effortCatalog)+1 {
-		t.Fatalf("effort keyboard rows = %d, want %d", len(efforts), len(effortCatalog)+1)
+func flattenKeyboardLabels(rows [][]tgKeyboardButton) []string {
+	var labels []string
+	for _, row := range rows {
+		labels = append(labels, keyboardRowTexts(row)...)
 	}
-	if efforts[len(efforts)-1][0].Text != cancelButtonText {
-		t.Fatalf("effort keyboard last = %q, want %q", efforts[len(efforts)-1][0].Text, cancelButtonText)
+	return labels
+}
+
+func keyboardRowTexts(row []tgKeyboardButton) []string {
+	out := make([]string, len(row))
+	for i, btn := range row {
+		out[i] = btn.Text
 	}
+	return out
 }
 
 func TestModelCommandWithoutArgsOpensPendingMenu(t *testing.T) {

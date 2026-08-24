@@ -656,20 +656,50 @@ func cancelAllPending() bool {
 }
 
 func modelMenuKeyboard() [][]tgKeyboardButton {
-	rows := make([][]tgKeyboardButton, 0, len(modelCatalog)+1)
-	for _, spec := range modelCatalog {
-		rows = append(rows, []tgKeyboardButton{{Text: spec.Label}})
-	}
-	rows = append(rows, cancelKeyboard()...)
-	return rows
+	return menuKeyboardWithCancel(modelMenuLabels(), 2)
 }
 
 func effortMenuKeyboard() [][]tgKeyboardButton {
-	rows := make([][]tgKeyboardButton, 0, len(effortCatalog)+1)
-	for _, e := range effortCatalog {
-		rows = append(rows, []tgKeyboardButton{{Text: e.Label}})
+	return menuKeyboardWithCancel(effortMenuLabels(), 3)
+}
+
+func modelMenuLabels() []string {
+	labels := make([]string, 0, len(modelCatalog))
+	for _, spec := range modelCatalog {
+		labels = append(labels, spec.Label)
 	}
-	rows = append(rows, cancelKeyboard()...)
+	return labels
+}
+
+func effortMenuLabels() []string {
+	labels := make([]string, 0, len(effortCatalog))
+	for _, e := range effortCatalog {
+		labels = append(labels, e.Label)
+	}
+	return labels
+}
+
+func menuKeyboardWithCancel(labels []string, cols int) [][]tgKeyboardButton {
+	return append(packKeyboardRows(labels, cols), cancelKeyboard()...)
+}
+
+func packKeyboardRows(labels []string, cols int) [][]tgKeyboardButton {
+	if cols < 1 {
+		cols = 1
+	}
+	rows := make([][]tgKeyboardButton, 0, (len(labels)+cols-1)/cols)
+	for i := 0; i < len(labels); {
+		n := cols
+		if n > len(labels)-i {
+			n = len(labels) - i
+		}
+		row := make([]tgKeyboardButton, n)
+		for j := 0; j < n; j++ {
+			row[j] = tgKeyboardButton{Text: labels[i+j]}
+		}
+		rows = append(rows, row)
+		i += n
+	}
 	return rows
 }
 
