@@ -19,7 +19,11 @@ func runProactiveModel(ctx context.Context, prompt string, historySuffix string,
 	return runModel(ctx, prompt, historySuffix, extraContext)
 }
 
-func runModel(ctx context.Context, prompt string, historySuffix string, extraContext string) (result string, err error) {
+func runModel(ctx context.Context, prompt string, historySuffix string, extraContext string) (string, error) {
+	return runModelSelection(ctx, currentModelSelection(), prompt, historySuffix, extraContext)
+}
+
+func runModelSelection(ctx context.Context, sel ModelSelection, prompt string, historySuffix string, extraContext string) (result string, err error) {
 	// Serialize all model invocations globally.
 	modelMu.Lock()
 	defer modelMu.Unlock()
@@ -35,12 +39,12 @@ func runModel(ctx context.Context, prompt string, historySuffix string, extraCon
 		}
 	}()
 
-	out, err := runAgentCLI(ctx, prompt, historySuffix, extraContext)
+	out, err := runAgentCLI(ctx, sel, prompt, historySuffix, extraContext)
 	if err != nil {
 		return "", err
 	}
 	out, action, err := handleAgentControlOutput(func(correctionPrompt string) (string, error) {
-		return runAgentCLI(ctx, correctionPrompt, historySuffix, "")
+		return runAgentCLI(ctx, sel, correctionPrompt, historySuffix, "")
 	}, out)
 	if err != nil {
 		return "", err
@@ -95,6 +99,7 @@ type agentCLIInvocation struct {
 	Session    SessionState
 	StartNew   bool
 	Spec       agentSpec
+	Selection  ModelSelection
 }
 
 func loadPersistedAgentSession(kind agentKind) SessionState {
@@ -112,8 +117,17 @@ func persistAgentSession(kind agentKind, sess SessionState) {
 }
 
 func buildAgentCLIInvocation(now time.Time, prompt string, extraContext string) (agentCLIInvocation, error) {
+	return buildAgentCLIInvocationSel(now, currentModelSelection(), prompt, extraContext)
+}
+
+func buildAgentCLIInvocationSel(now time.Time, sel ModelSelection, prompt string, extraContext string) (agentCLIInvocation, error) {
 	now = now.Local()
-	spec := configuredAgent()
+	model, ok := lookupModel(sel.Model)
+	if !ok {
+		model, _ = lookupModel(defaultModelID)
+		sel.Model = model.ID
+	}
+	spec := specFor(model.Agent)
 
 	UpdateState(func(s *State) {
 		s.expireSessionsForNewDay(now)
@@ -167,12 +181,13 @@ func buildAgentCLIInvocation(now time.Time, prompt string, extraContext string) 
 		Session:    sess,
 		StartNew:   startNew,
 		Spec:       spec,
+		Selection:  sel,
 	}, nil
 }
 
-func runAgentCLI(ctx context.Context, prompt string, historySuffix string, extraContext string) (string, error) {
+func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, historySuffix string, extraContext string) (string, error) {
 	now := time.Now().Local()
-	inv, err := buildAgentCLIInvocation(now, prompt, extraContext)
+	inv, err := buildAgentCLIInvocationSel(now, sel, prompt, extraContext)
 	if err != nil {
 		return "", err
 	}
@@ -181,7 +196,7 @@ func runAgentCLI(ctx context.Context, prompt string, historySuffix string, extra
 	historyStartInvocation(now, historySuffix, inv.Spec.HistoryMode, inv.Session.SessionID)
 
 	if inv.StartNew && inv.InitPrompt != "" {
-		initArgs := agentPromptArgs(inv.Spec.Kind, inv.Session.SessionID, true, inv.InitPrompt)
+		initArgs := agentPromptArgs(inv.Selection, inv.Session.SessionID, true, inv.InitPrompt)
 		historyLogPrompt(inv.InitPrompt)
 
 		sid, initOut, err := runAgentCommand(ctx, inv.Spec, initArgs)
@@ -199,7 +214,7 @@ func runAgentCLI(ctx context.Context, prompt string, historySuffix string, extra
 	}
 
 	newSession := inv.StartNew && inv.InitPrompt == ""
-	args := agentPromptArgs(inv.Spec.Kind, inv.Session.SessionID, newSession, inv.Prompt)
+	args := agentPromptArgs(inv.Selection, inv.Session.SessionID, newSession, inv.Prompt)
 	historyLogPrompt(inv.Prompt)
 
 	sid, out, err := runAgentCommand(ctx, inv.Spec, args)

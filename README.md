@@ -76,7 +76,7 @@ Anthropic currently supports logging in with a Claude subscription account such 
 
 ### Install Grok
 
-If you set `agent: grok`, install the Grok CLI and log in:
+If you pick Grok with `/model`, install the Grok CLI and log in:
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash
@@ -87,7 +87,7 @@ LifeBase runs Grok in headless always-approve mode (`grok -p --always-approve`) 
 
 ### Install Codex
 
-If you set `agent: codex`, install the Codex CLI and log in. See the [Codex CLI docs](https://github.com/openai/codex). Then start it once:
+If you pick a Codex model with `/model`, install the Codex CLI and log in. See the [Codex CLI docs](https://github.com/openai/codex). Then start it once:
 
 ```bash
 codex
@@ -226,7 +226,7 @@ Once Telegram is configured and the daemon is running, you can:
 - send voice notes
 - send photos or image files
 - use slash commands like `/morning`
-- use built-ins like `/pause`, `/resume`, `/new`, `/restart`, `/sync`, and `/health`
+- use built-ins like `/pause`, `/resume`, `/model`, `/effort`, `/new`, `/restart`, `/sync`, and `/health`
 
 Image behavior:
 
@@ -450,7 +450,7 @@ LifeBase is intentionally simple, but there are a few important moving parts.
 
 ### A persistent agent session
 
-LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. The CLI is selected with `agent` in `lifebase.yaml` (`claude`, `grok`, or `codex`). Claude, Grok, and Codex each have their own session, so switching `agent` during the day resumes that CLI's existing thread instead of starting over.
+LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. Telegram `/model` picks the provider and model (default: Claude Fable); `/effort` picks reasoning depth (default: Medium). Those overrides live in `state_file`. Claude, Grok, and Codex each have their own session, so switching model to another provider during the day resumes that CLI's existing thread instead of starting over.
 
 Each session is rotated daily, and a new day expires every agent's session (not only the one you are using):
 
@@ -613,7 +613,7 @@ All paths are resolved relative to the directory containing `lifebase.yaml`, unl
 | --- | --- | --- |
 | `raw_inputs_dir` | `Raw` | Where raw transcriptions and reused input notes live. |
 | `prompts_dir` | `Prompts` | Directory containing prompt files. |
-| `agent` | `claude` | Coding-agent CLI used for reasoning: `claude`, `grok`, or `codex`. |
+| `agent` | `claude` | Kept for existing configs; runtime CLI follows `/model` (default Claude Fable). |
 | `state_file` | `lifebase-state.json` | Persistent daemon state: seen files, prompt runs, agent session, pending log input, etc. |
 | `secrets_file` | `lifebase-secrets.yaml` | YAML file containing the OpenAI and Telegram secrets. |
 | `audio_recorder_dir` | empty | Optional watched folder for `.m4a` recordings. |

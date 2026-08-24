@@ -447,6 +447,12 @@ func handleTelegramCommand(ctx context.Context, msg string, msgTime time.Time, c
 		_ = sendTelegramText(ctx, "Resumed auto-processing.")
 		_ = updateTelegramCommands(ctx)
 		return true
+	case "model":
+		_ = sendTelegramText(ctx, applyModelCommand(rest))
+		return true
+	case "effort":
+		_ = sendTelegramText(ctx, applyEffortCommand(rest))
+		return true
 	case "new":
 		if strings.TrimSpace(rest) != "" {
 			_ = sendTelegramText(ctx, "Usage: /new (no arguments).")
@@ -627,6 +633,14 @@ func updateTelegramCommands(ctx context.Context) error {
 				cmds = append(cmds, tgBotCommand{Command: "health", Description: "Show Apple Health (last 48h)"})
 			}
 		}
+	}
+	if !seen["model"] {
+		seen["model"] = true
+		cmds = append(cmds, tgBotCommand{Command: "model", Description: "Choose model"})
+	}
+	if !seen["effort"] {
+		seen["effort"] = true
+		cmds = append(cmds, tgBotCommand{Command: "effort", Description: "Choose reasoning effort"})
 	}
 	if !seen["new"] {
 		seen["new"] = true

@@ -71,23 +71,38 @@ func specFor(kind agentKind) agentSpec {
 }
 
 func configuredAgent() agentSpec {
-	kind, err := parseAgent(config.Agent)
-	if err != nil {
-		log.Fatal(err)
+	spec, ok := lookupModel(currentModelSelection().Model)
+	if !ok {
+		spec, _ = lookupModel(defaultModelID)
 	}
-	return specFor(kind)
+	return specFor(spec.Agent)
 }
 
-func agentPromptArgs(kind agentKind, sessionID string, newSession bool, prompt string) []string {
-	switch kind {
+var lookPath = exec.LookPath
+
+func agentBinaryMissing(kind agentKind) string {
+	spec := specFor(kind)
+	if _, err := lookPath(spec.Bin); err != nil {
+		return spec.InstallHint
+	}
+	return ""
+}
+
+func agentPromptArgs(sel ModelSelection, sessionID string, newSession bool, prompt string) []string {
+	model, ok := lookupModel(sel.Model)
+	if !ok {
+		model, _ = lookupModel(defaultModelID)
+	}
+	effort := string(providerEffort(model, sel.Effort))
+	switch model.Agent {
 	case agentCodex:
-		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json"}
+		args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", model.ModelName, "-c", "model_reasoning_effort=" + effort}
 		if !newSession {
 			args = append(args, "resume", sessionID)
 		}
 		return append(args, prompt)
 	case agentGrok:
-		args := []string{"--always-approve", "--no-auto-update", "--output-format", "plain"}
+		args := []string{"--always-approve", "--no-auto-update", "--output-format", "plain", "-m", model.ModelName, "--effort", effort}
 		if newSession {
 			args = append(args, "--session-id", sessionID)
 		} else {
@@ -95,7 +110,7 @@ func agentPromptArgs(kind agentKind, sessionID string, newSession bool, prompt s
 		}
 		return append(args, "-p", prompt)
 	default:
-		args := []string{"--dangerously-skip-permissions"}
+		args := []string{"--dangerously-skip-permissions", "--model", model.ModelName, "--effort", effort}
 		if newSession {
 			args = append(args, "--session-id", sessionID)
 		} else {

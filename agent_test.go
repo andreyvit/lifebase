@@ -42,30 +42,33 @@ func TestParseAgent(t *testing.T) {
 func TestAgentPromptArgs(t *testing.T) {
 	prompt := "hello world"
 	sid := "11111111-2222-4333-8444-555555555555"
+	claudeSel := ModelSelection{Model: "claude-fable", Effort: effortMedium}
+	grokSel := ModelSelection{Model: "grok", Effort: effortMax}
+	codexSel := ModelSelection{Model: "codex-sol", Effort: effortHigh}
 
-	claudeNew := agentPromptArgs(agentClaude, sid, true, prompt)
-	if !containsAll(claudeNew, "--dangerously-skip-permissions", "--session-id", sid, "-p", prompt) {
+	claudeNew := agentPromptArgs(claudeSel, sid, true, prompt)
+	if !containsAll(claudeNew, "--dangerously-skip-permissions", "--model", "fable", "--effort", "medium", "--session-id", sid, "-p", prompt) {
 		t.Fatalf("claude new args = %#v", claudeNew)
 	}
-	claudeResume := agentPromptArgs(agentClaude, sid, false, prompt)
+	claudeResume := agentPromptArgs(claudeSel, sid, false, prompt)
 	if !containsAll(claudeResume, "--resume", sid, "-p", prompt) {
 		t.Fatalf("claude resume args = %#v", claudeResume)
 	}
 
-	grokNew := agentPromptArgs(agentGrok, sid, true, prompt)
-	if !containsAll(grokNew, "--always-approve", "--session-id", sid, "-p", prompt) {
+	grokNew := agentPromptArgs(grokSel, sid, true, prompt)
+	if !containsAll(grokNew, "--always-approve", "-m", "grok-4.6", "--effort", "xhigh", "--session-id", sid, "-p", prompt) {
 		t.Fatalf("grok new args = %#v", grokNew)
 	}
 	if containsAll(grokNew, "--resume") {
 		t.Fatalf("grok new args unexpectedly resume: %#v", grokNew)
 	}
-	grokResume := agentPromptArgs(agentGrok, sid, false, prompt)
+	grokResume := agentPromptArgs(grokSel, sid, false, prompt)
 	if !containsAll(grokResume, "--always-approve", "--resume", sid, "-p", prompt) {
 		t.Fatalf("grok resume args = %#v", grokResume)
 	}
 
-	codexNew := agentPromptArgs(agentCodex, sid, true, prompt)
-	if !containsAll(codexNew, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt) {
+	codexNew := agentPromptArgs(codexSel, sid, true, prompt)
+	if !containsAll(codexNew, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=high", prompt) {
 		t.Fatalf("codex new args = %#v", codexNew)
 	}
 	for _, arg := range codexNew {
@@ -73,7 +76,7 @@ func TestAgentPromptArgs(t *testing.T) {
 			t.Fatalf("codex new args should not resume: %#v", codexNew)
 		}
 	}
-	codexResume := agentPromptArgs(agentCodex, sid, false, prompt)
+	codexResume := agentPromptArgs(codexSel, sid, false, prompt)
 	if !containsAll(codexResume, "exec", "resume", sid, prompt) {
 		t.Fatalf("codex resume args = %#v", codexResume)
 	}
@@ -163,9 +166,9 @@ func TestBuildAgentCLIInvocationReusesPerAgentSessions(t *testing.T) {
 			FirstMessageAt: now,
 			LastMessageAt:  now,
 		}
+		s.Model = "claude-fable"
 	})
 
-	config.Agent = "claude"
 	inv, err := buildAgentCLIInvocation(now, "hello", "")
 	if err != nil {
 		t.Fatalf("buildAgentCLIInvocation claude: %v", err)
@@ -177,7 +180,7 @@ func TestBuildAgentCLIInvocationReusesPerAgentSessions(t *testing.T) {
 		t.Fatalf("claude session id = %q, want claude-session", inv.Session.SessionID)
 	}
 
-	config.Agent = "grok"
+	UpdateState(func(s *State) { s.Model = "grok" })
 	inv, err = buildAgentCLIInvocation(now, "hello", "")
 	if err != nil {
 		t.Fatalf("buildAgentCLIInvocation grok: %v", err)
@@ -189,7 +192,7 @@ func TestBuildAgentCLIInvocationReusesPerAgentSessions(t *testing.T) {
 		t.Fatalf("grok session id = %q, want grok-session", inv.Session.SessionID)
 	}
 
-	config.Agent = "codex"
+	UpdateState(func(s *State) { s.Model = "codex-sol" })
 	inv, err = buildAgentCLIInvocation(now, "hello", "")
 	if err != nil {
 		t.Fatalf("buildAgentCLIInvocation codex: %v", err)
@@ -256,9 +259,9 @@ func TestExpireSessionsForNewDayClearsStaleAgents(t *testing.T) {
 		s.ClaudeSession = SessionState{SessionID: "claude-today", FirstMessageAt: now.Add(-time.Hour), LastMessageAt: now.Add(-time.Minute)}
 		s.GrokSession = SessionState{SessionID: "grok-yesterday", FirstMessageAt: yesterday, LastMessageAt: yesterday}
 		s.CodexSession = SessionState{SessionID: "codex-yesterday", FirstMessageAt: yesterday, LastMessageAt: yesterday}
+		s.Model = "claude-fable"
 	})
 
-	config.Agent = "claude"
 	inv, err := buildAgentCLIInvocation(now, "hello", "")
 	if err != nil {
 		t.Fatalf("buildAgentCLIInvocation: %v", err)

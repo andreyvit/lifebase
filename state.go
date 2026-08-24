@@ -32,6 +32,14 @@ type State struct {
 	ClaudeSession SessionState `json:"claude_session,omitzero"`
 	CodexSession  SessionState `json:"codex_session,omitzero"`
 	GrokSession   SessionState `json:"grok_session,omitzero"`
+
+	// Model and Effort are runtime overrides (StableID and effort id). Empty means defaults.
+	Model  string `json:"model,omitzero"`
+	Effort string `json:"effort,omitzero"`
+	// RecentModels / RecentEfforts are 5-item MRU lists, updated only on explicit /model and /effort.
+	RecentModels  []string `json:"recent_models,omitzero"`
+	RecentEfforts []string `json:"recent_efforts,omitzero"`
+
 	// IsRestartingMyself is set just before LifeBase exits intentionally so the
 	// next launch can notify the active agent session that restart completed.
 	IsRestartingMyself bool `json:"is_restarting_myself,omitempty"`
