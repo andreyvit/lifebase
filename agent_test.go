@@ -44,10 +44,10 @@ func TestAgentPromptArgs(t *testing.T) {
 	sid := "11111111-2222-4333-8444-555555555555"
 	claudeSel := ModelSelection{Model: "claude-fable", Effort: effortMedium}
 	grokSel := ModelSelection{Model: "grok", Effort: effortMax}
-	codexSel := ModelSelection{Model: "codex-sol", Effort: effortHigh}
+	codexSel := ModelSelection{Model: "codex-astra", Effort: effortHigh}
 
 	claudeNew := agentPromptArgs(claudeSel, sid, true, prompt)
-	if !containsAll(claudeNew, "--dangerously-skip-permissions", "--model", "fable", "--effort", "medium", "--session-id", sid, "-p", prompt) {
+	if !containsAll(claudeNew, "--dangerously-skip-permissions", "--model", "claude-fable-5-1", "--effort", "medium", "--session-id", sid, "-p", prompt) {
 		t.Fatalf("claude new args = %#v", claudeNew)
 	}
 	claudeResume := agentPromptArgs(claudeSel, sid, false, prompt)
@@ -68,7 +68,7 @@ func TestAgentPromptArgs(t *testing.T) {
 	}
 
 	codexNew := agentPromptArgs(codexSel, sid, true, prompt)
-	if !containsAll(codexNew, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=high", prompt) {
+	if !containsAll(codexNew, "exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", "gpt-6-astra", "-c", "model_reasoning_effort=high", prompt) {
 		t.Fatalf("codex new args = %#v", codexNew)
 	}
 	for _, arg := range codexNew {

@@ -36,7 +36,7 @@ func TestMatchModel(t *testing.T) {
 	if spec.Label != "Claude Opus 5" || spec.ModelName != "opus" {
 		t.Fatalf("claude-opus = %#v", spec)
 	}
-	spec, err = matchModel("Claude Fable")
+	spec, err = matchModel("Claude Fable 5.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestRenderMenusHideIDs(t *testing.T) {
 	if strings.Contains(menu, "claude-fable") {
 		t.Fatalf("model menu leaked stable id:\n%s", menu)
 	}
-	if !strings.Contains(menu, "Current: Claude Fable, Medium") {
+	if !strings.Contains(menu, "Current: Claude Fable 5.1, Medium") {
 		t.Fatalf("model menu current:\n%s", menu)
 	}
 	if !strings.Contains(menu, "Choose a model:") {
@@ -187,7 +187,7 @@ func TestTelegramModelAndEffortCommands(t *testing.T) {
 	t.Cleanup(func() { lookPath = oldLookPath })
 
 	listing := applyModelCommand("")
-	if !strings.Contains(listing, "Claude Fable") {
+	if !strings.Contains(listing, "Claude Fable 5.1") {
 		t.Fatalf("/model listing:\n%s", listing)
 	}
 	if got := applyModelCommand("claude-opus"); got != "Using Claude Opus 5" {

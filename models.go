@@ -38,10 +38,11 @@ type effortSpec struct {
 }
 
 var modelCatalog = []modelSpec{
-	{Label: "Claude Fable", ID: "claude-fable", Agent: agentClaude, ModelName: "fable", MaxEffort: effortMax},
+	{Label: "Claude Fable", ID: "claude-fable", Agent: agentClaude, ModelName: "claude-fable-5-1", MaxEffort: effortMax},
 	{Label: "Claude Opus 5", ID: "claude-opus", Agent: agentClaude, ModelName: "opus", MaxEffort: effortMax},
 	{Label: "Claude Opus 4", ID: "claude-opus4", Agent: agentClaude, ModelName: "claude-opus-4-8", MaxEffort: effortMax},
 	{Label: "Claude Sonnet 5", ID: "claude-sonnet", Agent: agentClaude, ModelName: "sonnet", MaxEffort: effortMax},
+	{Label: "Codex GPT 6 Astra", ID: "codex-astra", Agent: agentCodex, ModelName: "gpt-6-astra", MaxEffort: effortMax},
 	{Label: "Codex GPT 5.6 Sol", ID: "codex-sol", Agent: agentCodex, ModelName: "gpt-5.6-sol", MaxEffort: effortMax},
 	{Label: "Codex GPT 5.6 Terra", ID: "codex-terra", Agent: agentCodex, ModelName: "gpt-5.6-terra", MaxEffort: effortMax},
 	{Label: "Codex GPT 5.6 Luna", ID: "codex-luna", Agent: agentCodex, ModelName: "gpt-5.6-luna", MaxEffort: effortMax},

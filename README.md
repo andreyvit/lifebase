@@ -450,7 +450,7 @@ LifeBase is intentionally simple, but there are a few important moving parts.
 
 ### A persistent agent session
 
-LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. Telegram `/model` picks the provider and model (default: Claude Fable); `/effort` picks reasoning depth (default: Medium). Without arguments they open a Telegram reply keyboard; Cancel or `/cancel` dismisses that menu, a pending log prompt, or queued uncaptained images. Those overrides live in `state_file`. Claude, Grok, and Codex each have their own session, so switching model to another provider during the day resumes that CLI's existing thread instead of starting over.
+LifeBase keeps a persistent coding-agent session in `state_file` and reuses it across messages. Telegram `/model` picks the provider and model (default: Claude Fable 5.1); `/effort` picks reasoning depth (default: Medium). Without arguments they open a Telegram reply keyboard; Cancel or `/cancel` dismisses that menu, a pending log prompt, or queued uncaptained images. Those overrides live in `state_file`. Claude, Grok, and Codex each have their own session, so switching model to another provider during the day resumes that CLI's existing thread instead of starting over.
 
 Each session is rotated daily, and a new day expires every agent's session (not only the one you are using):
 
@@ -613,7 +613,7 @@ All paths are resolved relative to the directory containing `lifebase.yaml`, unl
 | --- | --- | --- |
 | `raw_inputs_dir` | `Raw` | Where raw transcriptions and reused input notes live. |
 | `prompts_dir` | `Prompts` | Directory containing prompt files. |
-| `agent` | `claude` | Kept for existing configs; runtime CLI follows `/model` (default Claude Fable). |
+| `agent` | `claude` | Kept for existing configs; runtime CLI follows `/model` (default Claude Fable 5.1). |
 | `state_file` | `lifebase-state.json` | Persistent daemon state: seen files, prompt runs, agent session, pending log input, etc. |
 | `secrets_file` | `lifebase-secrets.yaml` | YAML file containing the OpenAI and Telegram secrets. |
 | `audio_recorder_dir` | empty | Optional watched folder for `.m4a` recordings. |
