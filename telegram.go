@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // sharedHTTPTransport caps idle-connection age below typical NAT timeouts so
@@ -105,13 +107,28 @@ func sendTelegramTextRaw(ctx context.Context, text string, replyMarkup any) erro
 		return fmt.Errorf("telegram not configured: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in secrets file")
 	}
 
+	// Send the whole document so tables, lists and code fences stay intact.
+	// Larger documents retain the plain-text chunking path until we support
+	// splitting Markdown at complete block boundaries.
+	if utf8.RuneCountInString(text) <= 32768 {
+		err := retryCtx(ctx, func() error {
+			return telegramSendRichMessage(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, text, replyMarkup)
+		})
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errTelegramRichRejected) {
+			return err
+		}
+		log.Printf("Telegram rejected rich formatting; sending plain text instead")
+	}
 	chunks := splitTelegramChunks(text, 3500)
 	for i, ch := range chunks {
 		var markup any
 		if i == len(chunks)-1 {
 			markup = replyMarkup
 		}
-		if err := retry(func() error {
+		if err := retryCtx(ctx, func() error {
 			return telegramSendMessage(ctx, secrets.TelegramBotToken, secrets.TelegramChatID, ch, markup)
 		}); err != nil {
 			if len(chunks) > 1 {
@@ -131,7 +148,6 @@ func sendTelegramChatAction(ctx context.Context, action string) error {
 }
 
 func telegramSendMessage(ctx context.Context, botToken, chatID, text string, replyMarkup any) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     text,
@@ -140,6 +156,26 @@ func telegramSendMessage(ctx context.Context, botToken, chatID, text string, rep
 	if replyMarkup != nil {
 		payload["reply_markup"] = replyMarkup
 	}
+	return telegramPostMessage(ctx, botToken, "sendMessage", payload)
+}
+
+var errTelegramRichRejected = errors.New("telegram rejected rich message")
+
+// Telegram Rich Markdown supports GitHub-style tables and nested formatting.
+// https://core.telegram.org/bots/api#rich-message-formatting-options
+func telegramSendRichMessage(ctx context.Context, botToken, chatID, text string, replyMarkup any) error {
+	payload := map[string]any{
+		"chat_id":      chatID,
+		"rich_message": map[string]any{"markdown": text},
+	}
+	if replyMarkup != nil {
+		payload["reply_markup"] = replyMarkup
+	}
+	return telegramPostMessage(ctx, botToken, "sendRichMessage", payload)
+}
+
+func telegramPostMessage(ctx context.Context, botToken, method string, payload map[string]any) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", botToken, method)
 	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -161,6 +197,12 @@ func telegramSendMessage(ctx context.Context, botToken, chatID, text string, rep
 			msg = msg[:500] + "…"
 		}
 		err := fmt.Errorf("telegram API HTTP %d: %s", res.StatusCode, strings.TrimSpace(msg))
+		// A rejected request sent nothing, so a plain-text fallback is safe.
+		// Never fall back on network failures, throttling or server errors:
+		// delivery can be ambiguous and an extra request can duplicate it.
+		if method == "sendRichMessage" && res.StatusCode == http.StatusBadRequest {
+			return permanent(fmt.Errorf("%w: %v", errTelegramRichRejected, err))
+		}
 		if res.StatusCode >= 400 && res.StatusCode < 500 && res.StatusCode != 408 && res.StatusCode != 429 {
 			return permanent(err)
 		}
