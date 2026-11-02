@@ -199,7 +199,7 @@ func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, history
 		initArgs := agentPromptArgs(inv.Selection, inv.Session.SessionID, true, inv.InitPrompt)
 		historyLogPrompt(inv.InitPrompt)
 
-		sid, initOut, err := runAgentCommand(ctx, inv.Spec, initArgs)
+		sid, initOut, err := runAgentCommand(ctx, inv.Spec, initArgs, nil)
 		historyLogAssistant(initOut)
 		if err != nil {
 			return "", fmt.Errorf("%s init: %w", inv.Spec.Bin, err)
@@ -217,7 +217,14 @@ func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, history
 	args := agentPromptArgs(inv.Selection, inv.Session.SessionID, newSession, inv.Prompt)
 	historyLogPrompt(inv.Prompt)
 
-	sid, out, err := runAgentCommand(ctx, inv.Spec, args)
+	var onMessage func(string)
+	// Only user-triggered turns get previews; background jobs may decide to stay silent.
+	if inv.Spec.Kind == agentCodex && historySuffix == "ingest" && secrets.TelegramBotToken != "" && secrets.TelegramChatID != "" {
+		draft := startTelegramDraft(ctx)
+		defer draft.stop()
+		onMessage = draft.update
+	}
+	sid, out, err := runAgentCommand(ctx, inv.Spec, args, onMessage)
 	if err != nil {
 		historyLogAssistant(out)
 		return "", err

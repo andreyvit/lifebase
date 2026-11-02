@@ -115,7 +115,7 @@ func runAgentConflictResolver(ctx context.Context, prompt string) (string, error
 	spec := configuredAgent()
 	log.Printf("Running %s CLI for Git rebase conflict...", spec.DisplayName)
 	args := agentPromptArgs(currentModelSelection(), "", true, prompt)
-	_, out, err := runAgentCommand(ctx, spec, args)
+	_, out, err := runAgentCommand(ctx, spec, args, nil)
 	return out, err
 }
 

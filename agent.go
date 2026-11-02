@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -120,7 +121,7 @@ func agentPromptArgs(sel ModelSelection, sessionID string, newSession bool, prom
 	}
 }
 
-func runAgentCommand(ctx context.Context, spec agentSpec, args []string) (sessionID, out string, err error) {
+func runAgentCommand(ctx context.Context, spec agentSpec, args []string, onMessage func(string)) (sessionID, out string, err error) {
 	logAgentCLICommand(spec.Bin, args)
 	cmd := exec.CommandContext(ctx, spec.Bin, args...)
 	cmd.Dir = rootDir
@@ -129,6 +130,11 @@ func runAgentCommand(ctx context.Context, spec agentSpec, args []string) (sessio
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	if spec.Kind == agentCodex && onMessage != nil {
+		stream := &codexMessageStream{onMessage: onMessage}
+		cmd.Stdout = io.MultiWriter(&stdout, stream)
+		defer stream.flush()
+	}
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
 	stdoutStr := stdout.String()
