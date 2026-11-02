@@ -57,11 +57,18 @@ func (s *codexMessageStream) emit(line []byte) {
 		return
 	}
 	text := strings.TrimSpace(e.Item.Text)
+	// Keep the useful previous preview while an initial fragment is incomplete.
+	if e.Type != "item.completed" && len([]rune(text)) < 8 {
+		return
+	}
 	if strings.Contains(text, "<<<LIFEBASE:") || text == "SKIP" {
 		text = ""
 	}
 	s.onMessage(text)
 }
+
+const telegramThinkingDraft = "<tg-thinking>Thinking…</tg-thinking>"
+const telegramDraftInterval = 250 * time.Millisecond
 
 type telegramDraft struct {
 	mu     sync.Mutex
@@ -75,13 +82,21 @@ func startTelegramDraft(ctx context.Context) *telegramDraft {
 	ctx, cancel := context.WithCancel(ctx)
 	d := &telegramDraft{wake: make(chan struct{}, 1), cancel: cancel, done: make(chan struct{})}
 	id := time.Now().UnixNano()
+	var previous string
 	go d.run(ctx, func(ctx context.Context, text string) error {
+		// These are complete snapshots, not token deltas. A fresh ID replaces
+		// them immediately instead of animating unrelated messages letter by letter.
+		if text != previous {
+			id++
+			previous = text
+		}
 		return telegramPostMessage(ctx, secrets.TelegramBotToken, "sendRichMessageDraft", map[string]any{
 			"chat_id":      secrets.TelegramChatID,
 			"draft_id":     id,
 			"rich_message": map[string]any{"markdown": text},
 		})
 	})
+	d.update(telegramThinkingDraft)
 	return d
 }
 
@@ -107,7 +122,7 @@ func (d *telegramDraft) stop() {
 
 func (d *telegramDraft) run(ctx context.Context, send func(context.Context, string) error) {
 	defer close(d.done)
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(telegramDraftInterval)
 	defer ticker.Stop()
 	var last string
 	var next, refresh time.Time
@@ -141,7 +156,7 @@ func (d *telegramDraft) run(ctx context.Context, send func(context.Context, stri
 			continue
 		}
 		last = text
-		next = now.Add(time.Second)
+		next = now.Add(telegramDraftInterval)
 		refresh = now.Add(20 * time.Second) // Draft previews expire after 30 seconds.
 	}
 }

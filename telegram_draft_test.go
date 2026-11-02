@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,7 +33,7 @@ func TestCodexMessageStream(t *testing.T) {
 		s.Write([]byte{b})
 	}
 	s.flush()
-	want := []string{"Hello", "Hello 🍵", "Latest message", "", ""}
+	want := []string{"Latest message", "", ""}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -104,5 +108,57 @@ func TestTelegramDraftCoalescesAndCancels(t *testing.T) {
 	case text := <-sent:
 		t.Fatalf("unexpected draft %q", text)
 	default:
+	}
+}
+
+func TestTelegramDraftThinkingAndReplacement(t *testing.T) {
+	type draftPayload struct {
+		ID   int64 `json:"draft_id"`
+		Rich struct {
+			Markdown string `json:"markdown"`
+		} `json:"rich_message"`
+	}
+	received := make(chan draftPayload, 10)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p draftPayload
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			t.Error(err)
+		}
+		if r.URL.Path != "/bottest/sendRichMessageDraft" {
+			t.Error(r.URL.Path)
+		}
+		received <- p
+		w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer srv.Close()
+	oldTransport, oldSecrets := sharedHTTPTransport, secrets
+	transport := srv.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.ServerName = "example.com"
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+	sharedHTTPTransport = transport
+	secrets.TelegramBotToken, secrets.TelegramChatID = "test", "123"
+	defer func() { sharedHTTPTransport, secrets = oldTransport, oldSecrets; transport.CloseIdleConnections() }()
+	d := startTelegramDraft(context.Background())
+	defer d.stop()
+	next := func() draftPayload {
+		t.Helper()
+		select {
+		case p := <-received:
+			return p
+		case <-time.After(2 * time.Second):
+			t.Fatal("no draft")
+			return draftPayload{}
+		}
+	}
+	initial := next()
+	if initial.Rich.Markdown != telegramThinkingDraft || initial.ID == 0 {
+		t.Fatalf("initial: %+v", initial)
+	}
+	d.update("Here is the first useful message.")
+	replacement := next()
+	if replacement.ID == initial.ID || replacement.Rich.Markdown != "Here is the first useful message." {
+		t.Fatalf("replacement: %+v", replacement)
 	}
 }

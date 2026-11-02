@@ -28,6 +28,14 @@ func runModelSelection(ctx context.Context, sel ModelSelection, prompt string, h
 	modelMu.Lock()
 	defer modelMu.Unlock()
 
+	var onMessage func(string)
+	model, _ := lookupModel(sel.Model)
+	if model.Agent == agentCodex && historySuffix == "ingest" && secrets.TelegramBotToken != "" && secrets.TelegramChatID != "" {
+		draft := startTelegramDraft(ctx)
+		defer draft.stop()
+		onMessage = draft.update
+	}
+
 	maybeRunHealthDayChangeProcessing(ctx, time.Now().Local())
 
 	bestEffortCommitAndPushAllChanges(ctx, "changes before running model")
@@ -39,12 +47,12 @@ func runModelSelection(ctx context.Context, sel ModelSelection, prompt string, h
 		}
 	}()
 
-	out, err := runAgentCLI(ctx, sel, prompt, historySuffix, extraContext)
+	out, err := runAgentCLI(ctx, sel, prompt, historySuffix, extraContext, onMessage)
 	if err != nil {
 		return "", err
 	}
 	out, action, err := handleAgentControlOutput(func(correctionPrompt string) (string, error) {
-		return runAgentCLI(ctx, sel, correctionPrompt, historySuffix, "")
+		return runAgentCLI(ctx, sel, correctionPrompt, historySuffix, "", onMessage)
 	}, out)
 	if err != nil {
 		return "", err
@@ -185,7 +193,7 @@ func buildAgentCLIInvocationSel(now time.Time, sel ModelSelection, prompt string
 	}, nil
 }
 
-func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, historySuffix string, extraContext string) (string, error) {
+func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, historySuffix string, extraContext string, onMessage func(string)) (string, error) {
 	now := time.Now().Local()
 	inv, err := buildAgentCLIInvocationSel(now, sel, prompt, extraContext)
 	if err != nil {
@@ -217,13 +225,6 @@ func runAgentCLI(ctx context.Context, sel ModelSelection, prompt string, history
 	args := agentPromptArgs(inv.Selection, inv.Session.SessionID, newSession, inv.Prompt)
 	historyLogPrompt(inv.Prompt)
 
-	var onMessage func(string)
-	// Only user-triggered turns get previews; background jobs may decide to stay silent.
-	if inv.Spec.Kind == agentCodex && historySuffix == "ingest" && secrets.TelegramBotToken != "" && secrets.TelegramChatID != "" {
-		draft := startTelegramDraft(ctx)
-		defer draft.stop()
-		onMessage = draft.update
-	}
 	sid, out, err := runAgentCommand(ctx, inv.Spec, args, onMessage)
 	if err != nil {
 		historyLogAssistant(out)
