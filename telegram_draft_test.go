@@ -113,10 +113,8 @@ func TestTelegramDraftCoalescesAndCancels(t *testing.T) {
 
 func TestTelegramDraftThinkingAndReplacement(t *testing.T) {
 	type draftPayload struct {
-		ID   int64 `json:"draft_id"`
-		Rich struct {
-			Markdown string `json:"markdown"`
-		} `json:"rich_message"`
+		ID   int64  `json:"draft_id"`
+		Text string `json:"text"`
 	}
 	received := make(chan draftPayload, 10)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +122,7 @@ func TestTelegramDraftThinkingAndReplacement(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 			t.Error(err)
 		}
-		if r.URL.Path != "/bottest/sendRichMessageDraft" {
+		if r.URL.Path != "/bottest/sendMessageDraft" {
 			t.Error(r.URL.Path)
 		}
 		received <- p
@@ -153,12 +151,17 @@ func TestTelegramDraftThinkingAndReplacement(t *testing.T) {
 		}
 	}
 	initial := next()
-	if initial.Rich.Markdown != telegramThinkingDraft || initial.ID == 0 {
+	if initial.Text != "" || initial.ID == 0 || initial.ID >= 1<<53 {
 		t.Fatalf("initial: %+v", initial)
 	}
 	d.update("Here is the first useful message.")
 	replacement := next()
-	if replacement.ID == initial.ID || replacement.Rich.Markdown != "Here is the first useful message." {
+	if replacement.ID == initial.ID || replacement.Text != "Here is the first useful message." {
 		t.Fatalf("replacement: %+v", replacement)
+	}
+	d.update("First paragraph.\n\n<p>&nbsp;</p>\n\n" + strings.Repeat("🍵", 4200))
+	long := next()
+	if len([]rune(long.Text)) != 4096 || !strings.HasSuffix(long.Text, "…") || strings.Contains(long.Text, "<p>") {
+		t.Fatalf("invalid long preview: %d runes", len([]rune(long.Text)))
 	}
 }

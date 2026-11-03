@@ -58,7 +58,7 @@ func (s *codexMessageStream) emit(line []byte) {
 	}
 	text := strings.TrimSpace(e.Item.Text)
 	// Keep the useful previous preview while an initial fragment is incomplete.
-	if e.Type != "item.completed" && len([]rune(text)) < 8 {
+	if e.Type != "item.completed" && len([]rune(text)) < 80 {
 		return
 	}
 	if strings.Contains(text, "<<<LIFEBASE:") || text == "SKIP" {
@@ -68,7 +68,9 @@ func (s *codexMessageStream) emit(line []byte) {
 }
 
 const telegramThinkingDraft = "<tg-thinking>Thinking…</tg-thinking>"
-const telegramDraftInterval = 250 * time.Millisecond
+
+// Leave room for the separate typing indicator under Telegram's 40/30s limit.
+const telegramDraftInterval = time.Second
 
 type telegramDraft struct {
 	mu     sync.Mutex
@@ -81,19 +83,27 @@ type telegramDraft struct {
 func startTelegramDraft(ctx context.Context) *telegramDraft {
 	ctx, cancel := context.WithCancel(ctx)
 	d := &telegramDraft{wake: make(chan struct{}, 1), cancel: cancel, done: make(chan struct{})}
-	id := time.Now().UnixNano()
+	id := time.Now().UnixMilli()
 	var previous string
 	go d.run(ctx, func(ctx context.Context, text string) error {
-		// These are complete snapshots, not token deltas. A fresh ID replaces
-		// them immediately instead of animating unrelated messages letter by letter.
+		// Use ordinary text drafts: Telegram iOS currently slows rich-draft
+		// reveal by 10x. The final persistent reply still uses rich formatting.
 		if text != previous {
 			id++
 			previous = text
 		}
-		return telegramPostMessage(ctx, secrets.TelegramBotToken, "sendRichMessageDraft", map[string]any{
-			"chat_id":      secrets.TelegramChatID,
-			"draft_id":     id,
-			"rich_message": map[string]any{"markdown": text},
+		preview := strings.ReplaceAll(text, "<p>&nbsp;</p>", "")
+		if text == telegramThinkingDraft {
+			preview = "" // Native Thinking placeholder for ordinary drafts.
+		}
+		runes := []rune(preview)
+		if len(runes) > 4096 {
+			preview = string(runes[:4095]) + "…"
+		}
+		return telegramPostMessage(ctx, secrets.TelegramBotToken, "sendMessageDraft", map[string]any{
+			"chat_id":  secrets.TelegramChatID,
+			"draft_id": id,
+			"text":     preview,
 		})
 	})
 	d.update(telegramThinkingDraft)
